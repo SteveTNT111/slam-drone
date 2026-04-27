@@ -1,26 +1,39 @@
 <launch>
     <!--
         这个 launch 只负责启动桥接节点。
-        适合你已经手动启动了 MAVROS、Livox、FAST-LIO2 之后，
-        单独测试 “FAST-LIO2 到 MAVROS” 这一段链路。
+        适合已经手动启动了 MAVROS、Livox、FAST-LIO2 之后，
+        单独测试“FAST-LIO2 到 MAVROS”这一段链路。
+
+        当前版本增加了一个参考开源脚本里的思路：
+        在正式发布外部视觉位姿之前，先用 PX4 本地位姿的 yaw 做一次初始对齐。
     -->
 
     <arg name="odom_topic" default="/Odometry" />
+    <arg name="local_pose_topic" default="/mavros/local_position/pose" />
     <arg name="vision_pose_topic" default="/mavros/vision_pose/pose" />
     <arg name="vision_speed_topic" default="/mavros/vision_speed/speed_twist" />
     <arg name="odom_frame" default="odom" />
     <arg name="base_frame" default="base_link" />
     <arg name="publish_speed" default="false" />
+    <arg name="align_yaw_with_px4" default="true" />
+    <arg name="window_size" default="8" />
+    <arg name="yaw_reset_threshold" default="0.01" />
+    <arg name="publish_rate" default="30.0" />
 
     <node pkg="fastlio_to_mavros"
           type="fastlio_mavros_bridge.py"
           name="fastlio_to_mavros_bridge"
           output="screen">
         <param name="odom_topic" value="$(arg odom_topic)" />
+        <param name="local_pose_topic" value="$(arg local_pose_topic)" />
         <param name="vision_pose_topic" value="$(arg vision_pose_topic)" />
         <param name="vision_speed_topic" value="$(arg vision_speed_topic)" />
         <param name="odom_frame" value="$(arg odom_frame)" />
         <param name="base_frame" value="$(arg base_frame)" />
         <param name="publish_speed" value="$(arg publish_speed)" />
+        <param name="align_yaw_with_px4" value="$(arg align_yaw_with_px4)" />
+        <param name="window_size" value="$(arg window_size)" />
+        <param name="yaw_reset_threshold" value="$(arg yaw_reset_threshold)" />
+        <param name="publish_rate" value="$(arg publish_rate)" />
     </node>
 </launch>
