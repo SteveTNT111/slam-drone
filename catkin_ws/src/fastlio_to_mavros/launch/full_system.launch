@@ -1,0 +1,34 @@
+<launch>
+    <!--
+        使用说明：
+        1. 先在同一个终端依次 source：
+           /opt/ros/noetic/setup.bash
+           ~/livox_ws/devel/setup.bash
+           ~/fast_lio2_ws/devel/setup.bash
+           ~/catkin_ws/devel/setup.bash
+        2. 再执行：
+           roslaunch fastlio_to_mavros full_system.launch
+
+        这个 launch 适合“单终端直接拉起整套系统”。
+        如果你更想观察每个模块单独的报错，优先用 tools/start_uav_stack.sh。
+    -->
+
+    <arg name="fcu_url" default="/dev/ttyACM0:57600" />
+
+    <!-- 启动 MAVROS，与 PX4 飞控建立串口连接。 -->
+    <include file="$(find mavros)/launch/px4.launch">
+        <arg name="fcu_url" value="$(arg fcu_url)" />
+    </include>
+
+    <!-- 启动 Livox MID360 驱动，输出雷达点云和雷达 IMU。 -->
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch" />
+
+    <!-- 启动 FAST-LIO2，使用 MID360 配置进行建图和里程计解算。 -->
+    <include file="$(find fast_lio)/launch/mapping_mid360.launch" />
+
+    <!-- 启动桥接脚本，把 FAST-LIO2 位姿送给 MAVROS。 -->
+    <node pkg="fastlio_to_mavros"
+          type="fastlio_mavros_bridge.py"
+          name="fastlio_to_mavros_bridge"
+          output="screen" />
+</launch>

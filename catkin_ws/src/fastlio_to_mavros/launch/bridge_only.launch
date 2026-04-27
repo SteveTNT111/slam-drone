@@ -1,0 +1,26 @@
+<launch>
+    <!--
+        这个 launch 只负责启动桥接节点。
+        适合你已经手动启动了 MAVROS、Livox、FAST-LIO2 之后，
+        单独测试 “FAST-LIO2 到 MAVROS” 这一段链路。
+    -->
+
+    <arg name="odom_topic" default="/Odometry" />
+    <arg name="vision_pose_topic" default="/mavros/vision_pose/pose" />
+    <arg name="vision_speed_topic" default="/mavros/vision_speed/speed_twist" />
+    <arg name="odom_frame" default="odom" />
+    <arg name="base_frame" default="base_link" />
+    <arg name="publish_speed" default="false" />
+
+    <node pkg="fastlio_to_mavros"
+          type="fastlio_mavros_bridge.py"
+          name="fastlio_to_mavros_bridge"
+          output="screen">
+        <param name="odom_topic" value="$(arg odom_topic)" />
+        <param name="vision_pose_topic" value="$(arg vision_pose_topic)" />
+        <param name="vision_speed_topic" value="$(arg vision_speed_topic)" />
+        <param name="odom_frame" value="$(arg odom_frame)" />
+        <param name="base_frame" value="$(arg base_frame)" />
+        <param name="publish_speed" value="$(arg publish_speed)" />
+    </node>
+</launch>
