@@ -91,10 +91,15 @@ class FastLIOToMavrosBridge:
         self.window_size = rospy.get_param("~window_size", 8)
         self.yaw_reset_threshold = rospy.get_param("~yaw_reset_threshold", 0.01)
         self.publish_rate = rospy.get_param("~publish_rate", 30.0)
+        self.align_wait_timeout = rospy.get_param("~align_wait_timeout", 3.0)
+        self.fallback_to_direct = rospy.get_param("~fallback_to_direct", True)
 
         self.latest_odom = None
+        self.local_pose_received = False
         self.init_yaw = 0.0
         self.init_yaw_ready = not self.align_yaw_with_px4
+        self.align_disabled_due_timeout = False
+        self.start_time = rospy.get_time()
         self.yaw_filter = 滑动航向平均器(self.window_size, self.yaw_reset_threshold)
 
         self.pose_pub = rospy.Publisher(self.vision_pose_topic, PoseStamped, queue_size=10)
@@ -115,11 +120,14 @@ class FastLIOToMavrosBridge:
         rospy.loginfo("  航向滑动窗口大小: %s", self.window_size)
         rospy.loginfo("  航向重置阈值: %.4f", self.yaw_reset_threshold)
         rospy.loginfo("  发布频率: %.1f Hz", self.publish_rate)
+        rospy.loginfo("  初始对齐最长等待时间: %.1f 秒", self.align_wait_timeout)
+        rospy.loginfo("  超时后是否退回直接转发: %s", self.fallback_to_direct)
 
     def odom_callback(self, msg):
         self.latest_odom = msg
 
     def local_pose_callback(self, msg):
+        self.local_pose_received = True
         if self.init_yaw_ready:
             return
 
@@ -130,6 +138,33 @@ class FastLIOToMavrosBridge:
             self.init_yaw = self.yaw_filter.mean()
             self.init_yaw_ready = True
             rospy.loginfo("已完成初始 yaw 对齐，平均 yaw = %.4f rad", self.init_yaw)
+
+    def _alignment_wait_timed_out(self):
+        return (rospy.get_time() - self.start_time) >= self.align_wait_timeout
+
+    def _handle_alignment_timeout_if_needed(self):
+        if not self.align_yaw_with_px4:
+            return
+        if self.init_yaw_ready:
+            return
+        if not self.fallback_to_direct:
+            return
+        if not self._alignment_wait_timed_out():
+            return
+
+        self.align_disabled_due_timeout = True
+        self.align_yaw_with_px4 = False
+
+        if self.local_pose_received:
+            rospy.logwarn(
+                "等待 PX4 本地位姿 yaw 初始化超时，当前退回直接转发模式。"
+            )
+        else:
+            rospy.logwarn(
+                "在 %.1f 秒内没有收到 %s，当前退回直接转发模式。",
+                self.align_wait_timeout,
+                self.local_pose_topic,
+            )
 
     def _build_pose_message(self, odom_msg):
         if self.align_yaw_with_px4 and not self.init_yaw_ready:
@@ -179,9 +214,14 @@ class FastLIOToMavrosBridge:
         if self.latest_odom is None:
             return
 
+        self._handle_alignment_timeout_if_needed()
+
         pose_msg = self._build_pose_message(self.latest_odom)
         if pose_msg is None:
-            rospy.loginfo_throttle(3.0, "等待 PX4 本地位姿 yaw 初始化完成，暂不发布外部视觉位姿")
+            rospy.loginfo_throttle(
+                3.0,
+                "等待 PX4 本地位姿 yaw 初始化完成，暂不发布外部视觉位姿",
+            )
             return
 
         self.pose_pub.publish(pose_msg)
@@ -197,6 +237,8 @@ class FastLIOToMavrosBridge:
             pose_msg.pose.position.y,
             pose_msg.pose.position.z,
         )
+        if self.align_disabled_due_timeout:
+            rospy.loginfo_throttle(5.0, "当前使用直接转发模式，未执行初始 yaw 对齐")
 
 
 def main():
