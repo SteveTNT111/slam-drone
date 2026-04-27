@@ -1,0 +1,18 @@
+# 这几个目录目前只是参考资料，不纳入当前仓库版本管理
+/Fast-Drone-250-master/
+/2023电赛南邮H飞控代码/
+/2025南邮电赛G飞机上位机代码/
+/MAVROS参考脚本文件/
+
+# Python 运行缓存
+**/__pycache__/
+*.pyc
+
+# ROS 常见构建产物
+/catkin_ws/build/
+/catkin_ws/devel/
+/catkin_ws/log/
+
+# 常见数据与压缩包
+*.bag
+*.zip
