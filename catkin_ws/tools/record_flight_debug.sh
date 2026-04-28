@@ -8,18 +8,20 @@ set -euo pipefail
 #   bash ~/catkin_ws/tools/record_flight_debug.sh light
 #   bash ~/catkin_ws/tools/record_flight_debug.sh full
 #
-# light:
+# light：
 #   只录最关键的定位、飞控状态、遥控输入，文件较小，适合每次试飞都开。
-# full:
-#   在 light 的基础上再录雷达和点云结果，文件很大，适合排查“条带飞出去”这类问题。
+# full：
+#   在 light 的基础上再录雷达和点云结果，文件更大，适合排查“条带飞出去”。
 
 MODE="${1:-light}"
-BAG_DIR="${BAG_DIR:-$HOME/bags}"
+BAG_DIR="${BAG_DIR:-$HOME/catkin_ws/rosbags}"
 STAMP="$(date +%F_%H-%M-%S)"
 
 mkdir -p "$BAG_DIR"
 
 source /opt/ros/noetic/setup.bash
+
+ROSBAG_BIN="/opt/ros/noetic/bin/rosbag"
 
 COMMON_TOPICS=(
   /mavros/state
@@ -52,7 +54,7 @@ case "$MODE" in
     ;;
   *)
     echo "[错误] 不支持的模式: $MODE" >&2
-    echo "[提示] 可选模式只有: light 或 full" >&2
+    echo "[提示] 可选模式只有 light 或 full" >&2
     exit 1
     ;;
 esac
@@ -64,4 +66,4 @@ printf '  %s\n' "${TOPICS[@]}"
 echo
 echo "[提示] 请在起飞前先开始录制，落地并断桨后再按 Ctrl+C 结束。"
 
-rosbag record -O "$BAG_PATH" "${TOPICS[@]}"
+"$ROSBAG_BIN" record -O "$BAG_PATH" "${TOPICS[@]}"
