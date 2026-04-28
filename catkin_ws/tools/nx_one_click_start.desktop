@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=激光雷达无人机一键启动
+Comment=双击后自动拉起 MAVROS、Livox、FAST-LIO2 和 bridge
+Exec=/bin/bash -lc "$HOME/catkin_ws/tools/nx_one_click_start.sh"
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;
+StartupNotify=true
