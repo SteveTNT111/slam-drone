@@ -1,0 +1,82 @@
+path: /home/password123456/catkin_ws/rosbags/flight_debug_full_2026-04-28_04-06-27.bag
+version: 2.0
+duration: 320.273095
+start: 1777374388.864557
+end: 1777374709.137652
+size: 2119191315
+messages: 116471
+indexed: True
+compression: none
+types:
+    - type: geometry_msgs/PoseStamped
+      md5: d3812c3cbc69362b77dc0b19b345f8f5
+    - type: livox_ros_driver2/CustomMsg
+      md5: e4d6829bdfe657cb6c21a746c86b21a6
+    - type: mavros_msgs/ExtendedState
+      md5: ae780b1800fe17b917369d21b90058bd
+    - type: mavros_msgs/RCIn
+      md5: 1c3eafdb5efbcda3c334e1788bbcfe39
+    - type: mavros_msgs/State
+      md5: 65cd0a9fff993b062b91e354554ec7e9
+    - type: nav_msgs/Odometry
+      md5: cd5e73d190d741a2f92e81eda573aca7
+    - type: nav_msgs/Path
+      md5: 6227e2b7e9cce15051f669a5e197bbf7
+    - type: sensor_msgs/Imu
+      md5: 6a62c6daae103f4ff57a132d6f95cec2
+    - type: sensor_msgs/PointCloud2
+      md5: 1158d486dd51d683ce2f1be655c3c181
+    - type: tf2_msgs/TFMessage
+      md5: 94810edda583a504dfda3829e70d7eec
+topics:
+    - topic: /Odometry
+      type: nav_msgs/Odometry
+      messages: 3202
+      frequency: 10.0190
+    - topic: /cloud_registered
+      type: sensor_msgs/PointCloud2
+      messages: 3203
+      frequency: 10.0257
+    - topic: /livox/imu
+      type: sensor_msgs/Imu
+      messages: 64054
+      frequency: 206.6363
+    - topic: /livox/lidar
+      type: livox_ros_driver2/CustomMsg
+      messages: 3203
+      frequency: 10.0017
+    - topic: /mavros/extended_state
+      type: mavros_msgs/ExtendedState
+      messages: 640
+      frequency: 2.0004
+    - topic: /mavros/imu/data_raw
+      type: sensor_msgs/Imu
+      messages: 16013
+      frequency: 48.3594
+    - topic: /mavros/local_position/pose
+      type: geometry_msgs/PoseStamped
+      messages: 9509
+      frequency: 30.2441
+    - topic: /mavros/rc/in
+      type: mavros_msgs/RCIn
+      messages: 3202
+      frequency: 10.0358
+    - topic: /mavros/state
+      type: mavros_msgs/State
+      messages: 321
+      frequency: 1.0000
+    - topic: /mavros/vision_pose/pose
+      type: geometry_msgs/PoseStamped
+      messages: 9604
+      frequency: 30.0163
+    - topic: /path
+      type: nav_msgs/Path
+      messages: 320
+      frequency: 1.0002
+    - topic: /tf
+      type: tf2_msgs/TFMessage
+      messages: 3199
+      frequency: 10.0185
+    - topic: /tf_static
+      type: tf2_msgs/TFMessage
+      messages: 1

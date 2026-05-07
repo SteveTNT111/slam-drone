@@ -104,7 +104,7 @@ ROSBAG_DIR="${ROSBAG_DIR:-$HOME/catkin_ws/rosbags}"
 
 LIVOX_LAUNCH="${LIVOX_LAUNCH:-msg_MID360.launch}"
 FASTLIO_LAUNCH="${FASTLIO_LAUNCH:-mapping_mid360.launch}"
-RECORD_MODE="${RECORD_MODE:-light}"
+RECORD_MODE="${RECORD_MODE:-full}"
 
 if [[ -z "$TERMINAL_BIN" ]]; then
   echo "[错误] 没找到可用的图形终端，请在 NX 图形桌面环境里运行这个脚本。" >&2

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=px4ctrl一键降落
+Comment=双击后向 px4ctrl 发送自动降落命令
+Exec=/bin/bash -lc "$HOME/catkin_ws/tools/nx_one_click_px4ctrl_land.sh"
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
+StartupNotify=true

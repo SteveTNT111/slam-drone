@@ -3,6 +3,10 @@
 /2023电赛H南邮飞控代码/
 /2025电赛G南邮飞机上位机代码/
 /MAVROS参考脚本文件/
+/FAST_LIO/
+/LiDAR_IMU_Init/
+/catkin_ws/src/FAST_LIO/
+/catkin_ws/src/LiDAR_IMU_Init/
 
 # Python 运行缓存
 **/__pycache__/
