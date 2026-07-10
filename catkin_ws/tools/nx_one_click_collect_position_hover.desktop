@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=定点悬停数据收集
+Comment=双击后录制 PX4 定点/定高模式悬停数据，用于分析高度和油门
+Exec=/bin/bash -lc "$HOME/catkin_ws/tools/nx_one_click_collect_position_hover.sh"
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
+StartupNotify=true

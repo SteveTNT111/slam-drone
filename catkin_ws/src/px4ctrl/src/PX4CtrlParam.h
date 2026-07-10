@@ -33,11 +33,18 @@ public:
 	struct ThrustMapping
 	{
 		bool print_val;
+		bool enable_online_estimation;
 		double K1;
 		double K2;
 		double K3;
 		bool accurate_thrust_model;
 		double hover_percentage;
+	};
+
+	struct Safety
+	{
+		double min_thrust;
+		double max_thrust;
 	};
 
 	struct RCReverse
@@ -63,6 +70,7 @@ public:
 	RCReverse rc_reverse;
 	ThrustMapping thr_map;
 	AutoTakeoffLand takeoff_land;
+	Safety safety;
 
 	int pose_solver;
 	double mass;

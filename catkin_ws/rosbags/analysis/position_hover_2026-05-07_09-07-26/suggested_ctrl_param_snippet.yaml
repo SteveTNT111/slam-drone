@@ -1,0 +1,11 @@
+# Suggested snippet from analyze_hover_bag.py
+# Review manually before copying into ctrl_param_fpv.yaml.
+max_manual_vel: 0.35
+auto_takeoff_land:
+    takeoff_height: 0.6
+    takeoff_land_speed: 0.15
+thrust_model:
+    hover_percentage: 0.450
+gain:
+    Kp2: 1.10
+    Kv2: 1.80

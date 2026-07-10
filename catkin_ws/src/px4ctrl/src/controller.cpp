@@ -33,7 +33,18 @@ LinearControl::calculateControl(const Desired_State_t &des,
       des_acc = des.a + Kv.asDiagonal() * (des.v - odom.v) + Kp.asDiagonal() * (des.p - odom.p);
       des_acc += Eigen::Vector3d(0,0,param_.gra);
 
-      u.thrust = computeDesiredCollectiveThrustSignal(des_acc);
+      const double raw_thrust = computeDesiredCollectiveThrustSignal(des_acc);
+      u.thrust = raw_thrust;
+      if (u.thrust > param_.safety.max_thrust)
+      {
+        ROS_WARN_THROTTLE(0.5, "[px4ctrl] thrust %.3f clipped to safety max %.3f", u.thrust, param_.safety.max_thrust);
+        u.thrust = param_.safety.max_thrust;
+      }
+      else if (u.thrust < param_.safety.min_thrust)
+      {
+        ROS_WARN_THROTTLE(0.5, "[px4ctrl] thrust %.3f clipped to safety min %.3f", u.thrust, param_.safety.min_thrust);
+        u.thrust = param_.safety.min_thrust;
+      }
       double roll,pitch,yaw,yaw_imu;
       double yaw_odom = fromQuaternion2yaw(odom.q);
       double sin = std::sin(yaw_odom);
@@ -72,6 +83,8 @@ LinearControl::calculateControl(const Desired_State_t &des,
   debug_msg_.des_q_w = u.q.w();
   
   debug_msg_.des_thr = u.thrust;
+  debug_msg_.hover_percentage = param_.thr_map.hover_percentage;
+  debug_msg_.thr_scale_compensate = thr2acc_;
   
   // Used for thrust-accel mapping estimation
   timed_thrust_.push(std::pair<ros::Time, double>(ros::Time::now(), u.thrust));
@@ -132,6 +145,12 @@ LinearControl::estimateThrustModel(
     double gamma = 1 / (rho2_ + thr * P_ * thr);
     double K = gamma * P_ * thr;
     thr2acc_ = thr2acc_ + K * (est_a(2) - thr * thr2acc_);
+    const double min_thr2acc = param.gra / param.safety.max_thrust;
+    const double max_thr2acc = param.gra / param.safety.min_thrust;
+    if (thr2acc_ < min_thr2acc)
+      thr2acc_ = min_thr2acc;
+    else if (thr2acc_ > max_thr2acc)
+      thr2acc_ = max_thr2acc;
     P_ = (1 - K * thr) * P_ / rho2_;
     //printf("%6.3f,%6.3f,%6.3f,%6.3f\n", thr2acc_, gamma, K, P_);
     //fflush(stdout);
@@ -148,7 +167,6 @@ LinearControl::resetThrustMapping(void)
   thr2acc_ = param_.gra / param_.thr_map.hover_percentage;
   P_ = 1e6;
 }
-
 
 
 

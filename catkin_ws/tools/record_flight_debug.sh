@@ -19,7 +19,9 @@ STAMP="$(date +%F_%H-%M-%S)"
 
 mkdir -p "$BAG_DIR"
 
+set +u
 source /opt/ros/noetic/setup.bash
+set -u
 
 ROSBAG_BIN="/opt/ros/noetic/bin/rosbag"
 
@@ -28,9 +30,18 @@ COMMON_TOPICS=(
   /mavros/extended_state
   /mavros/imu/data_raw
   /mavros/rc/in
+  /mavros/rc/out
+  /mavros/battery
   /Odometry
+  /fastlio_odom_with_velocity
   /mavros/vision_pose/pose
   /mavros/local_position/pose
+  /mavros/local_position/velocity_local
+  /mavros/setpoint_raw/attitude
+  /px4ctrl/takeoff_land
+  /debugPx4ctrl
+  /position_cmd
+  /traj_start_trigger
   /path
   /tf
   /tf_static

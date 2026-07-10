@@ -13,18 +13,30 @@ OUTPUT_PATH="$BAG_DIR/${BAG_PREFIX}_${TIMESTAMP}.bag"
 
 mkdir -p "$BAG_DIR"
 
+set +u
 source /opt/ros/noetic/setup.bash
 
 if [[ -f "$HOME/catkin_ws/devel/setup.bash" ]]; then
     source "$HOME/catkin_ws/devel/setup.bash"
 fi
+set -u
 
 TOPICS=(
     /Odometry
+    /fastlio_odom_with_velocity
     /mavros/vision_pose/pose
     /mavros/local_position/pose
+    /mavros/local_position/velocity_local
     /mavros/state
+    /mavros/extended_state
     /mavros/imu/data_raw
+    /mavros/rc/in
+    /mavros/rc/out
+    /mavros/battery
+    /mavros/setpoint_raw/attitude
+    /px4ctrl/takeoff_land
+    /debugPx4ctrl
+    /position_cmd
     /path
 )
 

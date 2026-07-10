@@ -104,15 +104,37 @@ register('/mavros/extended_state', 'mavros_extended_state.csv',
          ['t', 'vtol_state', 'landed_state'])
 register('/mavros/rc/in', 'mavros_rc_in.csv',
          ['t'] + [f'ch{i}' for i in range(1, 19)] + ['rssi'])
+register('/mavros/rc/out', 'mavros_rc_out.csv',
+         ['t'] + [f'ch{i}' for i in range(1, 19)])
+register('/mavros/battery', 'mavros_battery.csv',
+         ['t', 'voltage', 'current', 'percentage'])
 register('/mavros/imu/data_raw', 'mavros_imu_data_raw.csv',
          ['t', 'ang_x', 'ang_y', 'ang_z', 'lin_x', 'lin_y', 'lin_z'])
 register('/livox/imu', 'livox_imu.csv',
          ['t', 'ang_x', 'ang_y', 'ang_z', 'lin_x', 'lin_y', 'lin_z'])
 register('/Odometry', 'odometry.csv',
          ['t', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'])
+register('/fastlio_odom_with_velocity', 'fastlio_odom_with_velocity.csv',
+         ['t', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'])
 register('/mavros/vision_pose/pose', 'mavros_vision_pose.csv',
          ['t', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
 register('/mavros/local_position/pose', 'mavros_local_position.csv',
+         ['t', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
+register('/mavros/local_position/velocity_local', 'mavros_local_velocity.csv',
+         ['t', 'vx', 'vy', 'vz', 'wx', 'wy', 'wz'])
+register('/mavros/setpoint_raw/attitude', 'mavros_setpoint_raw_attitude.csv',
+         ['t', 'type_mask', 'qx', 'qy', 'qz', 'qw', 'body_rate_x', 'body_rate_y', 'body_rate_z', 'thrust'])
+register('/debugPx4ctrl', 'debug_px4ctrl.csv',
+         ['t', 'des_v_x', 'des_v_y', 'des_v_z', 'fb_a_x', 'fb_a_y', 'fb_a_z',
+          'des_a_x', 'des_a_y', 'des_a_z', 'des_q_x', 'des_q_y', 'des_q_z', 'des_q_w',
+          'des_thr', 'hover_percentage', 'thr_scale_compensate', 'voltage',
+          'err_axisang_x', 'err_axisang_y', 'err_axisang_z', 'err_axisang_ang',
+          'fb_rate_x', 'fb_rate_y', 'fb_rate_z'])
+register('/position_cmd', 'position_cmd.csv',
+         ['t', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'ax', 'ay', 'az', 'yaw', 'yaw_dot'])
+register('/px4ctrl/takeoff_land', 'px4ctrl_takeoff_land.csv',
+         ['t', 'takeoff_land_cmd'])
+register('/traj_start_trigger', 'traj_start_trigger.csv',
          ['t', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
 register('/path', 'path.csv',
          ['t', 'path_len', 'last_x', 'last_y', 'last_z'])
@@ -151,6 +173,15 @@ for topic, msg, t in bag.read_messages():
           channels = channels + [''] * (18 - len(channels))
         writer.writerow([ts] + channels[:18] + [msg.rssi])
 
+    elif topic == '/mavros/rc/out':
+        channels = list(msg.channels)
+        if len(channels) < 18:
+          channels = channels + [''] * (18 - len(channels))
+        writer.writerow([ts] + channels[:18])
+
+    elif topic == '/mavros/battery':
+        writer.writerow([ts, msg.voltage, msg.current, msg.percentage])
+
     elif topic in ('/mavros/imu/data_raw', '/livox/imu'):
         writer.writerow([
             ts,
@@ -158,7 +189,7 @@ for topic, msg, t in bag.read_messages():
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
         ])
 
-    elif topic == '/Odometry':
+    elif topic in ('/Odometry', '/fastlio_odom_with_velocity'):
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
         lv = msg.twist.twist.linear
@@ -166,6 +197,42 @@ for topic, msg, t in bag.read_messages():
         writer.writerow([ts, p.x, p.y, p.z, q.x, q.y, q.z, q.w, lv.x, lv.y, lv.z, av.x, av.y, av.z])
 
     elif topic in ('/mavros/vision_pose/pose', '/mavros/local_position/pose'):
+        p = msg.pose.position
+        q = msg.pose.orientation
+        writer.writerow([ts, p.x, p.y, p.z, q.x, q.y, q.z, q.w])
+
+    elif topic == '/mavros/local_position/velocity_local':
+        lv = msg.twist.linear
+        av = msg.twist.angular
+        writer.writerow([ts, lv.x, lv.y, lv.z, av.x, av.y, av.z])
+
+    elif topic == '/mavros/setpoint_raw/attitude':
+        q = msg.orientation
+        br = msg.body_rate
+        writer.writerow([ts, msg.type_mask, q.x, q.y, q.z, q.w, br.x, br.y, br.z, msg.thrust])
+
+    elif topic == '/debugPx4ctrl':
+        writer.writerow([
+            ts,
+            msg.des_v_x, msg.des_v_y, msg.des_v_z,
+            msg.fb_a_x, msg.fb_a_y, msg.fb_a_z,
+            msg.des_a_x, msg.des_a_y, msg.des_a_z,
+            msg.des_q_x, msg.des_q_y, msg.des_q_z, msg.des_q_w,
+            msg.des_thr, msg.hover_percentage, msg.thr_scale_compensate, msg.voltage,
+            msg.err_axisang_x, msg.err_axisang_y, msg.err_axisang_z, msg.err_axisang_ang,
+            msg.fb_rate_x, msg.fb_rate_y, msg.fb_rate_z,
+        ])
+
+    elif topic == '/position_cmd':
+        p = msg.position
+        v = msg.velocity
+        a = msg.acceleration
+        writer.writerow([ts, p.x, p.y, p.z, v.x, v.y, v.z, a.x, a.y, a.z, msg.yaw, msg.yaw_dot])
+
+    elif topic == '/px4ctrl/takeoff_land':
+        writer.writerow([ts, msg.takeoff_land_cmd])
+
+    elif topic == '/traj_start_trigger':
         p = msg.pose.position
         q = msg.pose.orientation
         writer.writerow([ts, p.x, p.y, p.z, q.x, q.y, q.z, q.w])
@@ -196,8 +263,11 @@ with open(out_dir / 'README_导出说明.txt', 'w', encoding='utf-8') as fp:
         '4. mavros_rc_in.csv\n'
         '5. mavros_state.csv\n'
         '6. mavros_imu_data_raw.csv\n'
-        '7. livox_imu.csv\n'
-        '8. livox_lidar_meta.csv / cloud_registered_meta.csv\n'
+        '7. debug_px4ctrl.csv\n'
+        '8. mavros_setpoint_raw_attitude.csv\n'
+        '9. position_cmd.csv\n'
+        '10. livox_imu.csv\n'
+        '11. livox_lidar_meta.csv / cloud_registered_meta.csv\n'
     )
 
 bag.close()

@@ -302,8 +302,11 @@ void PX4CtrlFSM::process()
 	// STEP2: estimate thrust model
 	if (state == AUTO_HOVER || state == CMD_CTRL)
 	{
-		// controller.estimateThrustModel(imu_data.a, bat_data.volt, param);
-		controller.estimateThrustModel(imu_data.a,param);
+		if (param.thr_map.enable_online_estimation)
+		{
+			// controller.estimateThrustModel(imu_data.a, bat_data.volt, param);
+			controller.estimateThrustModel(imu_data.a,param);
+		}
 
 	}
 

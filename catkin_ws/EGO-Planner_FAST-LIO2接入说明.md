@@ -545,6 +545,16 @@ px4ctrl 里的阈值是：
 - 通道 5 拉回低位：px4ctrl 退出 `AUTO_HOVER/CMD_CTRL`，调用 `toggle_offboard_mode(false)`，让 PX4 退出 `OFFBOARD` 回到进入 OFFBOARD 之前的模式。
 - 如果要“立刻停桨”，不要指望 px4ctrl 的通道 8；应在 PX4/QGC 里单独配置真正的 kill switch。
 
+更具体地说，在 `OFFBOARD` 里油门杆通常不是直接越过 px4ctrl 去控制电机。当前 px4ctrl 的 `AUTO_HOVER` 状态会把油门杆解释成“悬停目标高度微调”，源码逻辑类似：
+
+```text
+hover_pose.z += throttle_channel * max_manual_vel * dt
+```
+
+所以油门杆不居中时，飞机可能不是“油门直接变大”，而是 px4ctrl 的目标高度一直在往上或往下漂。当前项目已经把 `max_manual_vel` 从 `1.0` 降到 `0.35`，并修正了起飞前摇杆居中检查，避免只检查 roll 通道而漏掉 throttle/pitch/yaw。
+
+px4ctrl 主动退出 `OFFBOARD` 时，会尝试回到“进入 OFFBOARD 之前记录的 PX4 模式”。如果你是在 `Position` 下进入 OFFBOARD，正常会回到 `Position`；如果进入前是 `Manual/Stabilized`，则会回到对应模式。若是 setpoint 丢失触发 PX4 自己的 Offboard failsafe，则由 `COM_OF_LOSS_T`、`COM_OBL_RC_ACT` 等 PX4 参数决定。
+
 飞控侧建议检查或配置这些参数/功能：
 
 | 参数/功能 | 用途 | 建议 |
@@ -586,10 +596,10 @@ catkin_ws/src/px4ctrl/launch/run_ctrl_fastlio.launch
 | --- | --- | --- |
 | `mass` | 起飞重量，单位 kg | 必须改成实机重量 |
 | `thrust_model/hover_percentage` | 悬停油门估计值 | 必须根据实机修正 |
-| `auto_takeoff_land/takeoff_height` | 自动起飞高度 | 室内初期建议 1.0 m 左右 |
-| `auto_takeoff_land/takeoff_land_speed` | 自动起降速度 | 初期保持 0.3 m/s |
+| `auto_takeoff_land/takeoff_height` | 自动起飞高度 | 当前调参默认 `0.6 m`，稳定后再改回 `1.0 m` |
+| `auto_takeoff_land/takeoff_land_speed` | 自动起降速度 | 当前调参默认 `0.15 m/s` |
 | `rc_reverse` | 遥控器通道方向 | 必须确认 throttle、roll、pitch、yaw 方向 |
-| `gain/Kp*`、`gain/Kv*` | 位置/速度控制增益 | 初期不要大改 |
+| `gain/Kp*`、`gain/Kv*` | 位置/速度控制增益 | 当前 z 轴调参初值为 `Kp2=1.1`、`Kv2=1.8` |
 | `low_voltage` | 低电压阈值 | 根据电池节数设置 |
 
 如果自动起飞时螺旋桨转了但起不来，通常是 `hover_percentage` 偏小。  
@@ -632,8 +642,8 @@ thr2acc = gra / hover_percentage
 
 ```text
 gra = 9.81
-hover_percentage = 0.30
-thr2acc = 32.7
+hover_percentage = 0.42
+thr2acc = 23.36
 ```
 
 后面控制器算出期望 z 轴加速度 `des_acc_z` 后，会用：
@@ -689,11 +699,12 @@ est_a_z ≈ thr2acc * thrust
 更稳的顺序是：
 
 1. 先称重，修改 `mass`。
-2. 根据机型经验给 `hover_percentage` 一个保守初值，例如当前默认 `0.30`。
-3. 拆桨或拴绳验证 px4ctrl 能否进入 `OFFBOARD`、解锁、起飞状态机是否正常。
-4. 低高度、保护条件下试自动起飞。
-5. 根据现象修正 `hover_percentage`。
-6. 能稳定悬停后，再考虑用 `thrust_calibrate.py` 记录油门和电压数据。
+2. 根据机型经验给 `hover_percentage` 一个保守初值；当前 1.8 kg 起飞重量先使用 `0.42`。
+3. 先用 PX4 原生 `Position/Altitude` 类模式录一次悬停包，确认 FAST-LIO2 外部视觉高度送入 PX4 后本身稳定。
+4. 拆桨或拴绳验证 px4ctrl 能否进入 `OFFBOARD`、解锁、起飞状态机是否正常。
+5. 低高度、保护条件下试自动起飞。
+6. 根据 bag 分析和现象修正 `hover_percentage`。
+7. 能稳定悬停后，再考虑用 `thrust_calibrate.py` 记录油门和电压数据。
 
 判断方法：
 
@@ -704,7 +715,45 @@ est_a_z ≈ thr2acc * thrust
 | 悬停上下振荡 | 油门初值或 z 轴增益不合适 | 先修正油门，再小幅调 z 轴增益 |
 | 横向飘或姿态奇怪 | 定位/坐标/RC 方向问题 | 不要先调油门，先查坐标和通道 |
 
-### 5.3 自动起飞和降落脚本
+### 5.3 先用定点模式收集悬停数据
+
+如果 PX4 自己的 `Position/Altitude` 类模式已经能室内定点，就应该先用它收集基准数据。这样可以拆开判断：
+
+- PX4 原生定点都不稳：优先查 FAST-LIO2、EKF2 外部视觉融合、PX4 参数和振动。
+- PX4 原生定点稳，但 px4ctrl 上下振荡：优先查 `hover_percentage`、`Kp2/Kv2`、RC 油门中位和 px4ctrl 输出。
+
+启动定位底座后运行：
+
+```bash
+bash ~/catkin_ws/tools/collect_position_hover_data.sh
+```
+
+这一步只录包，不切 `OFFBOARD`，也不会向 px4ctrl 发起飞命令。操作员用遥控器或 QGC 进入 PX4 原生 `Position/Altitude` 类模式，手动飞到 0.5 到 1.0 m，悬停 30 到 60 秒，落地后按 `Ctrl+C` 停止录包。
+
+分析最新 bag：
+
+```bash
+bash ~/catkin_ws/tools/analyze_hover_bag.sh latest --target-z 1.0
+```
+
+脚本会输出：
+
+- `/Odometry` 的 z 均值、标准差、最大最小值和 `|vz|`。
+- `/mavros/local_position/pose`、`/mavros/vision_pose/pose` 和 `/Odometry` 的高度差。
+- `/mavros/rc/in` 油门杆是否居中。
+- 如果 bag 里有 `/debugPx4ctrl` 或 `/mavros/setpoint_raw/attitude`，会估算 px4ctrl 的悬停输出。
+- 如果 bag 里有 `/mavros/rc/out`，会用 PWM 粗略估算 PX4 原生悬停输出。
+
+输出文件位置：
+
+```text
+~/catkin_ws/rosbags/analysis/包名/hover_analysis.txt
+~/catkin_ws/rosbags/analysis/包名/suggested_ctrl_param_snippet.yaml
+```
+
+`suggested_ctrl_param_snippet.yaml` 只是建议片段，不会自动改参数。原则是一次只小幅修改，尤其 `hover_percentage` 单次不要跳太大。
+
+### 5.4 自动起飞和降落脚本
 
 当前工具脚本：
 
@@ -742,7 +791,7 @@ bash ~/catkin_ws/tools/px4ctrl_land.sh
 
 第一次只能拴绳或拆桨验证，确认模式切换、油门趋势和高度响应后再实飞。
 
-### 5.4 thrust_calibrate.py 怎么用
+### 5.5 thrust_calibrate.py 怎么用
 
 脚本位置：
 
@@ -805,7 +854,7 @@ thrust_model/hover_percentage
 
 注意：
 
-- `thrust_calibrate.launch` 里的 `mass_kg` 当前是示例值，必须改成实机重量。
+- `thrust_calibrate.launch` 里的 `mass_kg` 已按当前实机称重改为 `1.8`，换电池或加装设备后要重新改。
 - 这个脚本是 Python2 写法，需在 ROS Noetic 环境中确认 Python2/依赖是否可用。
 - 它不会自动生成新的 `ctrl_param_fpv.yaml`。
 - 对零基础用户，第一优先级仍然是用低风险起飞测试把 `hover_percentage` 调到合理范围。

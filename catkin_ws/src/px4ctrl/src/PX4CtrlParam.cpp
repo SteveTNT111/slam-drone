@@ -39,6 +39,9 @@ void Parameter_t::config_from_ros_handle(const ros::NodeHandle &nh)
 	read_essential_param(nh, "max_angle", max_angle);
 	read_essential_param(nh, "low_voltage", low_voltage);
 
+	nh.param("safety/min_thrust", safety.min_thrust, 0.05);
+	nh.param("safety/max_thrust", safety.max_thrust, 0.55);
+
 	read_essential_param(nh, "rc_reverse/roll", rc_reverse.roll);
 	read_essential_param(nh, "rc_reverse/pitch", rc_reverse.pitch);
 	read_essential_param(nh, "rc_reverse/yaw", rc_reverse.yaw);
@@ -51,6 +54,7 @@ void Parameter_t::config_from_ros_handle(const ros::NodeHandle &nh)
 	read_essential_param(nh, "auto_takeoff_land/takeoff_land_speed", takeoff_land.speed);
 
 	read_essential_param(nh, "thrust_model/print_value", thr_map.print_val);
+	nh.param("thrust_model/enable_online_estimation", thr_map.enable_online_estimation, false);
 	read_essential_param(nh, "thrust_model/K1", thr_map.K1);
 	read_essential_param(nh, "thrust_model/K2", thr_map.K2);
 	read_essential_param(nh, "thrust_model/K3", thr_map.K3);
@@ -74,6 +78,12 @@ void Parameter_t::config_from_ros_handle(const ros::NodeHandle &nh)
 	if ( thr_map.print_val )
 	{
 		ROS_WARN("You should disable \"print_value\" if you are in regular usage.");
+	}
+
+	if ( safety.max_thrust <= safety.min_thrust )
+	{
+		ROS_ERROR("Invalid safety thrust range: min=%f max=%f", safety.min_thrust, safety.max_thrust);
+		ROS_BREAK();
 	}
 };
 
