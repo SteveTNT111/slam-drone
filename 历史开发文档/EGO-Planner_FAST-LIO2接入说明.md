@@ -14,7 +14,7 @@ PX4 飞控 + MAVROS + Livox MID360 + FAST-LIO2 + EGO-Planner + px4ctrl
 
 它不是浙大 `Fast-Drone-250` 原始教程的全文搬运，而是把原项目里的规划、控制、消息包整理到当前 `catkin_ws/src` 之后，面向这台已经能室内定点的飞机写的完整使用说明。
 
-和 SSH、NoMachine、NX IP、同步脚本有关的基础操作，统一参考 [开发文档.md](slam_drone开发文档.md)，本文不重复展开。
+和 SSH、NoMachine、NX IP、同步脚本有关的基础操作，统一参考 [开发文档.md](开发文档.md)，本文不重复展开。
 
 ## 目录
 
@@ -1566,7 +1566,7 @@ catkin_ws/src/ego_planner/launch/advanced_param_fastlio.xml
 
 ## 12. 使用方法：编译、同步和启动
 
-本地推送到 NX 的方法参考 [开发文档.md](slam_drone开发文档.md) 里的“本地代码修改后，如何上传到 NX”章节。本文只说明 EGO-Planner 和 px4ctrl 相关的编译、启动、检查顺序。
+本地推送到 NX 的方法参考 [开发文档.md](开发文档.md) 里的“本地代码修改后，如何上传到 NX”章节。本文只说明 EGO-Planner 和 px4ctrl 相关的编译、启动、检查顺序。
 
 当前同步脚本会推送这些规划/控制相关包：
 
@@ -1792,7 +1792,7 @@ px4ctrl 负责“把这个期望轨迹变成飞控能执行的姿态和油门”
 
 ## 15. 给零基础用户的最小操作顺序
 
-1. 按 [开发文档.md](slam_drone开发文档.md) 把代码同步到 NX。
+1. 按 [开发文档.md](开发文档.md) 把代码同步到 NX。
 2. 在 NX 上 `catkin_make`。
 3. 启动基础链路 `start_uav_stack.sh`。
 4. 确认 `/Odometry`、`/cloud_registered`、`/mavros/vision_pose/pose` 正常。
