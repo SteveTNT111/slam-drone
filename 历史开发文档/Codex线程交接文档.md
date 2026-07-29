@@ -1,4 +1,4 @@
-# Codex线程交接文档
+﻿# Codex线程交接文档
 
 ## 1. 这份文档的用途
 
@@ -58,7 +58,7 @@
 - 用户已经明确说过：不要再去动这些现有文档的定位和结构
   - `D:\repos\slam-drone\catkin_ws\常用启动命令.md`
   - `D:\repos\slam-drone\catkin_ws\开发文档.md`
-  - `D:\repos\slam-drone\catkin_ws\临时开发文档.md`
+  - `D:\repos\slam-drone\catkin_ws\临时开发文档.md`（已过时；Obsidian 内已归档为 [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/历史开发文档/归档/临时开发文档_归档_2026-07-29.md]]）
 
 ### 3.2 工具和自动化偏好
 
@@ -91,7 +91,7 @@
 - `D:\repos\slam-drone\catkin_ws\tools`
 - `D:\repos\slam-drone\catkin_ws\常用启动命令.md`
 - `D:\repos\slam-drone\catkin_ws\开发文档.md`
-- `D:\repos\slam-drone\catkin_ws\临时开发文档.md`
+- `D:\repos\slam-drone\catkin_ws\临时开发文档.md`（已过时；Obsidian 内已归档为 [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/历史开发文档/归档/临时开发文档_归档_2026-07-29.md]]）
 - `D:\repos\slam-drone\catkin_ws\试飞检查与RViz总说明.md`
 
 这意味着用户已经不再完全依赖 NoMachine 里的远程桌面编辑，而是开始具备“本地镜像 + 版本管理 + SSH 覆盖回 NX”的工作流基础。
@@ -443,7 +443,7 @@ sleep 2
 - `开发文档.md`
   - 放长期开发说明、Git 基础、工作流
 - `临时开发文档.md`
-  - 放当前 IP 和当前阶段最直接可抄的上传命令
+  - 已删除现行文件，内容归档到 [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/历史开发文档/归档/临时开发文档_归档_2026-07-29.md]]；当前以 `开发文档.md` 为主
 - `试飞检查与RViz总说明.md`
   - 放试飞前检查、RViz 说明、监视项、录包说明
 - `Codex线程交接文档.md`
