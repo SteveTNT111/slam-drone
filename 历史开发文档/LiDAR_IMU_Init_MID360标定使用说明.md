@@ -1,4 +1,4 @@
-# LiDAR_IMU_Init MID360 标定使用说明
+﻿# LiDAR_IMU_Init MID360 标定使用说明
 
 这份文档用于把 `LiDAR_IMU_Init` 怎么跑、MID360 自带 IMU 怎么配、标定结果怎么填回 FAST-LIO2 讲清楚。当前目标是：不用飞控 IMU，改用 MID360 雷达自己的 `/livox/imu`，并把 LiDAR-IMU 外参和时间偏移整理成可以手动在 NX 上修改的步骤。
 
@@ -881,3 +881,280 @@ rostopic hz /path
 ```
 
 如果改成 `/livox/imu` 并填好外参后 path 仍然漂，下一步就不要只怀疑飞控 IMU。优先查雷达固定刚性、震动、时间戳同步、Livox 驱动配置、点云环境质量和 FAST-LIO2 参数。
+---
+
+## 附录 A：MAVIMU 路线：飞控 IMU 验证与 LI-Init 标定记录
+
+> 这一节记录“使用飞控 IMU 的 MAVIMU 路线”。它和本文前面推荐的“使用 MID360 自带 IMU”不是同一条路线。只有在确认要让 FAST-LIO2 使用 `/mavros/imu/data_raw` 时，才按这一节处理。
+
+### A.1 MAVIMU 一键启动的大致顺序
+
+MAVIMU 一键启动会自动拉起 MAVROS，顺序大致是：
+
+```text
+roscore
+→ MAVROS
+→ 请求 PX4 IMU 约 200 Hz
+→ Livox 驱动
+→ FAST-LIO2 MAVIMU 版
+→ 桥接脚本
+→ 监视与录包
+```
+
+但现在不建议直接运行它，因为这个脚本即使 MAVROS 没连接成功，也会继续启动 FAST-LIO2 和桥接。当前应该分两阶段进行。
+
+## A.2 第一阶段：只验证 Pixhawk IMU
+
+如果 NX 没有识别到 Pixhawk，没有 `/dev/ttyACM0`，先检查 USB 数据线、Pixhawk USB 接口和供电，直到下面命令有输出：
+
+```bash
+lsusb
+ls -l /dev/ttyACM*
+ls -l /dev/serial/by-id/
+```
+
+识别后，先只启动 MAVROS：
+
+```bash
+source /opt/ros/noetic/setup.bash
+roslaunch mavros px4.launch fcu_url:=/dev/ttyACM0:57600
+```
+
+另开终端确认连接：
+
+```bash
+source /opt/ros/noetic/setup.bash
+rostopic echo -n 1 /mavros/state
+```
+
+必须看到：
+
+```text
+connected: true
+```
+
+然后请求 200 Hz IMU：
+
+```bash
+rosrun mavros mavcmd long 511 105 5000 0 0 0 0 0
+rosrun mavros mavcmd long 511 31 5000 0 0 0 0 0
+```
+
+检查原始 IMU：
+
+```bash
+rostopic info /mavros/imu/data_raw
+rostopic echo -n 1 /mavros/imu/data_raw
+rostopic hz -w 200 /mavros/imu/data_raw
+```
+
+静止时应满足：
+
+- 角速度接近零。
+- 加速度模长约为 9.8 m/s²。
+- 时间戳持续递增、不跳变。
+- 频率尽量接近 200 Hz，至少应稳定在 100 Hz 以上。
+
+LI-Init 应使用 `/mavros/imu/data_raw`，不要使用融合姿态后的 `/mavros/imu/data`。
+
+## A.3 第二阶段：重新做 LI-Init
+
+标定阶段不要启动 FAST-LIO2、桥接、px4ctrl 和 EGO-Planner。只启动：
+
+```text
+MAVROS + Livox 驱动 + LI-Init
+```
+
+当前 LI-Init 配置应指向：
+
+```yaml
+lid_topic: "/livox/lidar"
+imu_topic: "/mavros/imu/data_raw"
+mean_acc_norm: 9.805
+```
+
+配置文件是：
+
+```text
+lidar_imu_init_ws/src/LiDAR_IMU_Init/config/mid360.yaml:1
+```
+
+先备份旧标定结果，因为 LI-Init 启动时会覆盖它：
+
+```bash
+cp ~/lidar_imu_init_ws/src/LiDAR_IMU_Init/result/Initialization_result.txt \
+   ~/lidar_imu_init_ws/src/LiDAR_IMU_Init/result/Initialization_result_old_pixhawk.txt
+```
+
+启动 Livox：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/livox_ws/devel/setup.bash
+roslaunch livox_ros_driver2 msg_MID360.launch
+```
+
+确认点云：
+
+```bash
+rostopic hz /livox/lidar
+```
+
+建议同时录制原始标定数据：
+
+```bash
+mkdir -p ~/catkin_ws/rosbags
+rosbag record -O ~/catkin_ws/rosbags/li_init_new_pixhawk \
+  /mavros/state \
+  /mavros/imu/data_raw \
+  /livox/lidar
+```
+
+然后启动 LI-Init：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/livox_ws/devel/setup.bash
+source ~/lidar_imu_init_ws/devel/setup.bash
+roslaunch lidar_imu_init livox_mid360.launch
+```
+
+启动后：
+
+1. 先保持整架飞机静止至少 5 秒。
+2. 拆掉螺旋桨。
+3. 手持整架飞机运动，保证雷达和飞控始终刚性固定。
+4. 分别充分激励 roll、pitch、yaw。
+5. 同时做前后、左右、上下平移。
+6. 根据 LI-Init 终端提示补充激励。
+7. 初始化完成后继续运动约 20 秒，完成在线 refinement。
+
+## A.4 2026-07-29 MAVROS 飞控 IMU 诊断记录
+
+这次检查的结论是：**MAVROS 通信和 IMU 数据正常，但手动请求高频之前，IMU 频率只有约 50 Hz，低于 MAVIMU / LI-Init 方案预期。**
+
+当时状态：
+
+- MAVROS 已连接：`connected: True`
+- 飞控类型：PX4 Quadrotor
+- 模式：MANUAL
+- 解锁状态：未解锁
+- 串口：`/dev/ttyACM0:57600`
+- 丢包：0
+- 解析错误：0
+- 通信错误：0
+- MAVLink 心跳：约 1 Hz
+- 时间同步：Normal
+- 最近 RTT：约 0.46–1.18 ms
+- IMU 消息平均延迟：约 4 ms
+
+IMU 检查：
+
+- 话题：`/mavros/imu/data_raw`
+- 类型：`sensor_msgs/Imu`
+- 初始频率：约 50.0 Hz
+- 10 个静止样本的加速度模长平均约 9.81 m/s²
+- 加速度模长范围约 9.62–10.07 m/s²
+- 静止角速度基本在 ±0.007 rad/s 以内
+- 时间戳连续，没有发现倒退
+- raw 消息姿态四元数为全零、姿态协方差首项为 -1，这是原始 IMU 消息的正常表现
+
+诊断里还有：
+
+- GPS：0 颗卫星，室内测试可以理解。
+- Pre-arm check：Fail，目前不允许直接起飞。
+- 电池显示 65.54 V 实际是“电池信息无效/未提供”的占位表现，很可能当前只使用 USB 供电。
+
+因此当时结论是：
+
+```text
+MAVROS 连接：正常
+飞控 IMU 数据：正常
+时间同步：正常
+通信质量：正常
+IMU 频率：不满足目标
+```
+
+## A.5 手动请求 200 Hz 后的结果
+
+执行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+rosrun mavros mavcmd long 511 105 5000 0 0 0 0 0
+rosrun mavros mavcmd long 511 31 5000 0 0 0 0 0
+rostopic hz -w 1000 /mavros/imu/data_raw
+```
+
+结果：
+
+```text
+average rate: 182.163
+average rate: 183.003
+average rate: 182.211
+average rate: 180.807
+average rate: 180.365
+```
+
+说明：
+
+- 手动 MAVLink 高频请求已经生效。
+- `/mavros/imu/data_raw` 从约 50 Hz 提升到了约 180 Hz。
+- 180 Hz 没有完全到 200 Hz，但已经明显接近目标，可能受 MAVLink 调度、链路总带宽、系统负载和 ROS 统计窗口影响。
+
+## A.6 这两条 mavcmd 命令的作用
+
+```bash
+rosrun mavros mavcmd long 511 105 5000 0 0 0 0 0
+rosrun mavros mavcmd long 511 31 5000 0 0 0 0 0
+```
+
+含义：
+
+| 参数 | 含义 |
+|---|---|
+| `511` | `MAV_CMD_SET_MESSAGE_INTERVAL`，设置某条 MAVLink 消息的发送间隔 |
+| `105` | `HIGHRES_IMU` 消息 ID |
+| `31` | `ATTITUDE_QUATERNION` 消息 ID |
+| `5000` | 发送间隔 5000 微秒，也就是 0.005 秒 |
+| `1 / 0.005` | 目标频率约 200 Hz |
+
+所以它们不是修改 ROS 话题本身，而是通过 MAVROS 请求 PX4 改变 MAVLink 消息发送频率。PX4 发得更快之后，MAVROS 发布出来的 `/mavros/imu/data_raw` 频率才会变高。
+
+## A.7 为什么 SD 卡 extras 写了，MAVROS 初始仍然只有 50 Hz
+
+Fast-Drone-250 的 `extras.txt` 里有类似命令：
+
+```bash
+mavlink stream -d /dev/ttyACM0 -s ATTITUDE_QUATERNION -r 200
+mavlink stream -d /dev/ttyACM0 -s HIGHRES_IMU -r 200
+```
+
+它应该是在 PX4 开机时设置消息流频率。但这次 MAVROS 初始仍然只有 50 Hz，说明 extras 的效果没有真正落到当前 MAVROS 使用的这条链路上。
+
+可能原因：
+
+1. `etc/extras.txt` 没有被 PX4 正确执行。
+2. 文件路径、文件名、SD 卡位置不对。
+3. `extras.txt` 里的 `/dev/ttyACM0` 和实际 MAVLink 实例不匹配。
+4. 脚本执行时对应 MAVLink 实例还没准备好，`mavlink stream` 没有成功作用到它。
+5. MAVROS 或其他地面站连接后又请求了默认频率。
+6. PX4 的 MAVLink 总带宽参数限制了实际频率。
+
+所以现在的可靠做法是：**MAVROS 连接成功后，再由 MAVIMU 脚本主动发一次 `MAV_CMD_SET_MESSAGE_INTERVAL` 请求。**
+
+## A.8 这两个命令是否永久生效
+
+一般不要当作永久配置。
+
+更准确地说：
+
+```text
+它们通常只对当前飞控运行期间、当前 MAVLink 连接/实例生效。
+```
+
+飞控重启、MAVLink 实例重启、MAVROS 重连之后，都可能恢复默认频率。因此正式流程里应该：
+
+- 要么修好 SD 卡 `etc/extras.txt`，让 PX4 每次开机自动设置；
+- 要么在 MAVIMU 一键启动脚本里，每次 MAVROS 连接后自动运行这两条请求；
+- 每次标定或飞行前，都用 `rostopic hz /mavros/imu/data_raw` 再确认一次。
