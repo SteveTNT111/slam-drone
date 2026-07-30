@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<sdf version="1.5">
+  <model name="pole">
+    <static>true</static>
+    <link name="link">
+      <!-- Main pole body -->
+      <visual name="pole_visual">
+        <geometry>
+          <cylinder>
+            <radius>0.025</radius>
+            <length>1.5</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <script>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+            <name>Gazebo/Red</name>
+          </script>
+        </material>
+      </visual>
+      <!-- Marker at 1m height -->
+      <visual name="marker_visual">
+        <pose>0 0.025 0.25 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.0001 0.05</size>
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://pole/materials/scripts/pole_marker.material</uri>
+            <name>PoleMarker</name>
+          </script>
+        </material>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <cylinder>
+            <radius>0.025</radius>
+            <length>2</length>
+          </cylinder>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf> 

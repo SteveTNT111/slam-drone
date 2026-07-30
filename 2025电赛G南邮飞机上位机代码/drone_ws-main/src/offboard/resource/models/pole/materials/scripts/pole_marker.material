@@ -1,0 +1,14 @@
+material PoleMarker
+{
+  technique
+  {
+    pass
+    {
+      texture_unit
+      {
+        texture ../textures/pole_marker.png
+        scale 1.0 1.0
+      }
+    }
+  }
+} 

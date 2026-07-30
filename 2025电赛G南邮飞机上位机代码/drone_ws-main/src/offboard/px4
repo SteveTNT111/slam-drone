@@ -1,0 +1,32 @@
+#!/bin/bash
+VEHICLE="iris"
+WORLD="$PX4_DIR/Tools/sitl_gazebo/worlds/empty.world"
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --vehicle)
+      VEHICLE="$2"
+      shift 2
+      ;;
+    --world)
+      WORLD="$2"
+      shift 2
+      ;;
+	*)
+	  exit 1
+	  ;;
+  esac
+done
+export PX4_SIM_MODEL="$VEHICLE"
+gzserver --verbose "$WORLD" &
+GZSERVER_PID=$!
+# 修改spawn命令，添加位置和旋转参数（-90度）
+gz model --spawn-file="$PX4_DIR/Tools/sitl_gazebo/models/$VEHICLE/$VEHICLE.sdf" --model-name="$VEHICLE" -x 0 -y 0 -z 0 -R 0 -P 0 -Y 0
+gzclient &
+GZCLIENT_PID=$!
+ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://:14540@127.0.0.1:14557 -p gcs_url:=udp://@127.0.0.1:14550 &
+MAVROS_PID=$!
+cd $PX4_DIR/build/px4_sitl_default
+./bin/px4 -s etc/init.d-posix/rcS
+PX4_PID=$!
+# 设置退出时的清理操作
+trap 'kill $GZSERVER_PID $GZCLIENT_PID $MAVROS_PID $PX4_PID 2>/dev/null' EXIT 

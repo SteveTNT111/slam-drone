@@ -1,0 +1,24 @@
+# 由 colcon 构建生成的目录
+build/
+install/
+log/
+
+# colcon 构建的元数据目录
+.colcon/
+
+# CMake 生成的中间文件
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+
+# Python 相关
+*.pyc
+__pycache__/
+
+# 临时文件
+*.swp
+*.tmp
+
+# 常用 IDE 相关（如果使用 Visual Studio Code 或 JetBrains 产品）
+.vscode/
+.idea/

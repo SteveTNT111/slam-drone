@@ -1,0 +1,35 @@
+<?xml version="1.0" ?>
+<sdf version="1.5">
+  <model name="first_ground">
+    <static>true</static>
+    <link name="link">
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>4 4.8 .1</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <pose>1.6 -2 0 0 0 0</pose>
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <box>
+            <size>4 4.8 .1</size>
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://first_ground/materials/scripts</uri>
+            <uri>model://first_ground/materials/textures</uri>
+            <name>my/first_ground</name>
+          </script>
+          <!-- 设置纹理不重复 -->
+          <texture>
+            <repeat>1 1</repeat> <!-- 将纹理重复设置为1x1，即不重复 -->
+          </texture>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

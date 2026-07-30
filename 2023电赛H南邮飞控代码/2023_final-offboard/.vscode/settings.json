@@ -1,0 +1,14 @@
+{
+    "cmake.sourceDirectory": "/home/kun2419/2023_final/src/training",
+    "python.autoComplete.extraPaths": [
+        "/home/kun2419/catkin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/kun2419/catkin_ws/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "files.associations": {
+        "cmath": "cpp"
+    }
+}

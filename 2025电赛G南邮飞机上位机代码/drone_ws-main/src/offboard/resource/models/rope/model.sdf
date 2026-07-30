@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<sdf version="1.5">
+  <model name="rope">
+    <static>true</static>
+    <!-- First black segment (0 to 1.2m) -->
+    <link name="black_segment1">
+      <visual name="visual">
+        <pose>0.6 0 1.0 0 1.5708 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.01</radius>
+            <length>1.2</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <script>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+            <name>Gazebo/Black</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+
+    <!-- Yellow segment with marker (1.2m to 1.25m) -->
+    <link name="yellow_segment">
+      <visual name="yellow_visual">
+        <pose>1.225 0 1.0 0 1.5708 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.01</radius>
+            <length>0.05</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <script>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+            <name>Gazebo/Yellow</name>
+          </script>
+        </material>
+      </visual>
+      <!-- Marker on yellow segment -->
+      <visual name="marker_visual">
+        <pose>1.225 0.01 1.0 0 1.5708 0</pose>
+        <geometry>
+          <box>
+            <size>0.05 0.0001 0.02</size>
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://rope/materials/scripts/rope_marker.material</uri>
+            <name>RopeMarker</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+
+    <!-- Second black segment (1.25m to 3m) -->
+    <link name="black_segment2">
+      <visual name="visual">
+        <pose>2.125 0 1.0 0 1.5708 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.01</radius>
+            <length>1.75</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <script>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+            <name>Gazebo/Black</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf> 
