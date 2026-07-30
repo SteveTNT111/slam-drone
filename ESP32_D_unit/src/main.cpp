@@ -9,7 +9,6 @@
 #include <cstring>
 
 #include "UART.h"
-#include "servo.h"
 
 namespace {
 
@@ -301,46 +300,19 @@ void processReceivedMessages() {
     }
 }
 
-void printServoState() {
-    Uart::printfLine("SERVO_STATE %s", LocalServo::stateName());
-}
-
-void runServoCommand(const char *command) {
-    bool success = false;
-
-    if (strcmp(command, "SERVO_OPEN") == 0) {
-        success = LocalServo::open();
-    } else if (strcmp(command, "SERVO_CLOSE") == 0) {
-        success = LocalServo::close();
-    } else {
-        success = LocalServo::toggle();
-    }
-
-    if (!success) {
-        Uart::writeLine("ERROR SERVO_NOT_READY");
-        return;
-    }
-
-    printServoState();
-}
-
 void printStatus() {
     Uart::printfLine(
         "STATUS espnow=%s uart=READY channel=%u baud=%lu mode=BROADCAST "
-        "link=%s led_pin=%u servo=%s servo_ready=%s servo_pin=%u",
+        "link=%s led_pin=%u",
         espNowReady ? "READY" : "NOT_READY",
         static_cast<unsigned>(ESPNOW_CHANNEL),
         static_cast<unsigned long>(Uart::BAUD_RATE),
         wirelessLinkActive() ? "ACTIVE" : "WAITING",
-        static_cast<unsigned>(STATUS_LED_PIN), LocalServo::stateName(),
-        LocalServo::ready() ? "YES" : "NO",
-        static_cast<unsigned>(LocalServo::GPIO_PIN));
+        static_cast<unsigned>(STATUS_LED_PIN));
 }
 
 void printHelp() {
-    Uart::writeLine(
-        "HELP SEND <text> | <text> | SERVO_OPEN | SERVO_CLOSE | "
-        "SERVO_TOGGLE | STATUS | HELP");
+    Uart::writeLine("HELP SEND <text> | <text> | STATUS | HELP");
 }
 
 void processUartCommand(const char *command) {
@@ -349,13 +321,6 @@ void processUartCommand(const char *command) {
     }
 
     Uart::printfLine("UART_RX %s", command);
-
-    if (strcmp(command, "SERVO_OPEN") == 0 ||
-        strcmp(command, "SERVO_CLOSE") == 0 ||
-        strcmp(command, "SERVO_TOGGLE") == 0) {
-        runServoCommand(command);
-        return;
-    }
 
     if (strcmp(command, "STATUS") == 0) {
         printStatus();
@@ -389,7 +354,6 @@ void setup() {
     pinMode(STATUS_LED_PIN, OUTPUT);
     digitalWrite(STATUS_LED_PIN, LOW);
 
-    const bool servoReady = LocalServo::begin();
     const bool queuesReady = createQueues();
     espNowReady = queuesReady && initializeEspNow();
 
@@ -400,12 +364,6 @@ void setup() {
                      espNowReady ? "READY" : "NOT_READY",
                      static_cast<unsigned>(STATUS_LED_PIN));
 
-    if (servoReady) {
-        printServoState();
-    } else {
-        Uart::printfLine("ERROR SERVO_INIT_FAILED pin=%u",
-                         static_cast<unsigned>(LocalServo::GPIO_PIN));
-    }
 }
 
 void loop() {
