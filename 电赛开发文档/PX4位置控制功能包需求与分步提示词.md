@@ -1,6 +1,6 @@
 ---
 created: 2026-07-29
-updated: 2026-07-29
+updated: 2026-07-30
 status: 待实现需求文档
 priority: 一号机主线
 platform: ROS1 Noetic + MAVROS + PX4 1.13.3 + FAST-LIO2
@@ -48,7 +48,7 @@ scope: 仅需求与提示词，不含实现代码
 
 ### 2.3 当前项目与 AP 参考
 
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/MAVROS参考脚本文件/reference.py]]
+-[[reference.py]]]
 - [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/历史开发文档/Codex线程交接文档.md]]
 - [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/历史开发文档/常用启动命令.md]]
 - [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/电赛开发文档/2026电赛载机进度记录.md]]
@@ -359,6 +359,231 @@ BOOT -> WAIT_FCU -> WAIT_LOCAL_POSE -> CAPTURE_ORIGIN
 
 > 每个提示词单独执行，完成后审查、编译、测试、提交，再做下一项。
 
+### 提示词 0：一键自动起飞—悬停—自动降落 MVP
+
+> 当前优先级最高。先不要接航点序列、EGO-Planner、视觉伴飞、抛投、动态降落或 `px4ctrl`。先用这个最小任务验证：我们能够安全、持续地向 PX4 发送位置 setpoint，并完整走通 OFFBOARD 进入和退出。
+
+```text
+你正在维护 slam-drone 项目的 ROS1 Noetic + MAVROS + PX4 1.13.3 真机控制代码。当前飞机已经可以依靠 FAST-LIO2 外部定位进入 PX4 Position 定点模式飞行。不要使用 EGO-Planner 自带的 px4ctrl，不要自写姿态/推力控制器，不要移植 ArduPilot GUIDED 逻辑。
+
+请先审阅当前工作空间、MAVROS 启动方式、fastlio_to_mavros 桥接、PX4 参数和现有工具脚本，然后设计并实现一个独立、最小、保守的“一键自动起降”ROS1 功能包或脚本。
+
+一、用户操作目标
+
+只提供一个正式任务触发入口。推荐使用 `std_srvs/Trigger` 服务，例如：
+
+/uav/run_one_key_takeoff_land
+
+地面调试按钮、终端命令或后续 ESP32 按钮最终都只能调用这个统一入口。
+
+用户按一次按钮后，程序自动完成：
+
+1. 检查飞控连接和本地定位；
+2. 锁存按键时的本地位置和机头 yaw；
+3. 持续预发送当前位置 HOLD setpoint；
+4. 请求 PX4 进入 OFFBOARD；
+5. 确认 OFFBOARD 真正生效；
+6. 自动解锁；
+7. 发送相对起点竖直向上 1.0 m 的位置 setpoint；
+8. 飞机到达目标高度并稳定后悬停 5.0 s；
+9. 请求 PX4 切换到 `AUTO.LAND`；
+10. 监视飞机自动落地和自动上锁；
+11. 任务结束后回到 IDLE，允许下一次任务。
+
+这不是“按一下起飞、再按一下降落”的双击切换逻辑，而是“一次按键自动完成起飞—悬停—降落全过程”。任务运行期间重复按键必须被拒绝，并返回“任务正在执行”。
+
+二、必须使用的 PX4/MAVROS 接口
+
+订阅：
+
+- `/mavros/state`：检查 connected、armed、mode；
+- `/mavros/local_position/pose`：使用 PX4 EKF 融合后的本地位置作为控制反馈；
+- 可选订阅 `/Odometry`、`/mavros/vision_pose/pose`，但只用于定位健康诊断，不直接绕过 PX4 作为第一版控制反馈。
+
+发布：
+
+- `/mavros/setpoint_position/local`：持续发送 `geometry_msgs/PoseStamped` 本地位置 setpoint。
+
+服务：
+
+- `/mavros/set_mode`：请求 `OFFBOARD` 和 `AUTO.LAND`；
+- `/mavros/cmd/arming`：请求正常解锁；
+- 不要在空中发送强制上锁命令；落地后等待 PX4 自动上锁。
+
+三、坐标和目标定义
+
+1. 按下任务按钮且本地位姿稳定后，锁存：
+   - 起点位置 `x0, y0, z0`；
+   - 起点 yaw `yaw0`。
+2. 起飞目标必须是：
+   - `x = x0`；
+   - `y = y0`；
+   - `z = z0 + 1.0 m`；
+   - `yaw = yaw0`。
+3. 不允许假设 PX4 本地原点一定是 `(0,0,0)`。
+4. 不允许把目标写成固定 `(0,0,1)`。
+5. 不手工再做 ENU/NED 轴交换；使用 MAVROS ROS 本地位置接口的坐标语义。
+6. `header.frame_id` 只是标签，不能代替真实坐标变换。
+
+四、setpoint 持续发送要求
+
+1. 使用独立 `rospy.Timer` 或独立线程，以默认 20 Hz 持续发布 setpoint。
+2. setpoint 发布不能依赖状态机主循环是否正好执行到某一步。
+3. 进入 OFFBOARD 前，先持续发送当前位姿 HOLD setpoint 至少 2.0 s。
+4. 请求 OFFBOARD、等待服务返回、请求解锁、等待起飞、悬停期间都不能停止发送。
+5. 在 `/mavros/state.mode` 确认真正进入 `AUTO.LAND` 之前，继续发送最后的悬停 setpoint，避免模式请求阶段发生 setpoint 断流。
+6. 确认 `AUTO.LAND` 后，停止推进 OFFBOARD 目标，不再重新申请 OFFBOARD，只监视降落状态。
+7. 实时监视实际发送频率；低于安全阈值时报警并停止继续推进任务。
+
+五、推荐状态机
+
+IDLE
+  -> VALIDATE
+  -> CAPTURE_START_POSE
+  -> PRESTREAM_HOLD
+  -> REQUEST_OFFBOARD
+  -> WAIT_OFFBOARD
+  -> REQUEST_ARM
+  -> WAIT_ARMED
+  -> TAKEOFF_TO_1M
+  -> WAIT_TAKEOFF_STABLE
+  -> HOVER_5S
+  -> REQUEST_AUTO_LAND
+  -> WAIT_AUTO_LAND
+  -> MONITOR_LANDING
+  -> WAIT_DISARMED
+  -> COMPLETE
+  -> IDLE
+
+异常分支至少包括：
+
+- FCU_DISCONNECTED；
+- LOCAL_POSE_TIMEOUT；
+- LOCAL_POSE_JUMP；
+- PRESTREAM_RATE_LOW；
+- OFFBOARD_REJECTED；
+- ARM_REJECTED；
+- TAKEOFF_TIMEOUT；
+- OFFBOARD_LOST；
+- PILOT_TAKEOVER；
+- AUTO_LAND_REJECTED；
+- LANDING_TIMEOUT。
+
+六、到达 1 米和悬停计时
+
+1. 高度目标是相对起点 `z0 + 1.0 m`。
+2. 到达条件不能只看一帧：
+   - `abs(x-x0) <= 0.15 m`；
+   - `abs(y-y0) <= 0.15 m`；
+   - `abs(z-(z0+1.0)) <= 0.10 m`；
+   - 连续满足至少 1.0 s。
+3. 只有完成“连续稳定 1.0 s”后，才开始计算悬停 5.0 s。
+4. 悬停 5 秒期间持续发送同一个目标。
+5. 若悬停期间误差明显超限，不继续累计有效悬停时间；可暂停计时并等待重新稳定。
+6. 起飞总超时建议默认 15 s，超时后不要继续上升，应请求安全降落并提示飞手接管。
+
+七、安全边界
+
+只有以下条件全部满足才允许开始：
+
+- FCU connected；
+- 当前未在执行另一任务；
+- `/mavros/local_position/pose` 连续有效且时间戳新鲜；
+- 位置和四元数不是 NaN/Inf；
+- 最近窗口没有明显位置跳变；
+- 飞机起始高度接近地面；
+- 飞机处于允许进入任务的模式；
+- 遥控器在线，飞手知道固定接管开关；
+- setpoint 发布器已经正常工作。
+
+运行时要求：
+
+1. 飞手主动切出 OFFBOARD，程序立即判定 PILOT_TAKEOVER/ABORT，绝不自动抢回 OFFBOARD。
+2. 定位超时或跳变时，停止推进起飞/悬停任务，优先请求安全降落并提示飞手接管；具体策略做成参数，真机前必须演练。
+3. 高度目标硬限制，第一版不得超过 1.2 m 相对高度。
+4. x/y 目标始终保持起点，不执行水平航点。
+5. 不调用 `px4ctrl`，不发布姿态、推力、电机或轨迹控制指令。
+6. 不使用 `/mavros/cmd/takeoff` 代替本地位置 setpoint；本任务中的“起飞指令”就是持续发送相对起点 1 m 的本地位置目标。
+7. 降落使用 PX4 的 `AUTO.LAND`，不要在 ROS 中自写下降速度闭环作为第一版正式方案。
+8. 不允许程序在空中调用强制 disarm。
+
+八、建议参数
+
+- `takeoff_height`: 1.0 m；
+- `hover_duration`: 5.0 s；
+- `setpoint_rate`: 20 Hz；
+- `prestream_duration`: 2.0 s；
+- `pose_timeout`: 0.3 s；
+- `takeoff_timeout`: 15.0 s；
+- `landing_timeout`: 30.0 s；
+- `xy_tolerance`: 0.15 m；
+- `z_tolerance`: 0.10 m；
+- `stable_duration`: 1.0 s；
+- `max_relative_height`: 1.2 m；
+- `auto_arm`: true，但必须保留参数开关和日志；
+- `dry_run`: true/false，默认建议 true，dry_run 时不调用模式和解锁服务。
+
+九、日志和诊断
+
+每次状态切换必须记录：
+
+- 当前状态和新状态；
+- 触发原因；
+- FCU mode/armed/connected；
+- 当前 x/y/z/yaw；
+- 起点 x0/y0/z0/yaw0；
+- 当前 setpoint；
+- 位姿数据年龄；
+- setpoint 实际频率；
+- 起飞误差；
+- 有效悬停累计时间；
+- 服务请求结果和最终真实模式。
+
+发布一个只读状态话题，例如 `/uav/one_key_task_state`，供终端、RViz 或地面站显示 IDLE、TAKEOFF、HOVER、LANDING、COMPLETE、ABORT 和故障原因。
+
+十、测试顺序
+
+1. 静态代码审查：确认没有调用 px4ctrl、姿态/推力/电机接口。
+2. dry_run：只打印状态和目标，不切模式、不解锁。
+3. 模拟 MAVROS 集成测试：验证状态机、超时、重复按钮拒绝、飞手退出后不抢模式。
+4. PX4 SITL：完成 1 m 起飞、稳定 5 s、AUTO.LAND。
+5. SITL 故障注入：位姿停止、OFFBOARD 拒绝、arm 拒绝、起飞超时、AUTO.LAND 拒绝、按钮重复触发。
+6. 真机拆桨：检查服务和模式变化。
+7. 真机系留/保护架：低高度验证遥控接管。
+8. 空旷场地首次真机：先把高度改为 0.5 m，通过后再恢复 1.0 m。
+9. 每次真机测试同时保存 rosbag 和 PX4 日志。
+
+十一、验收标准
+
+- 单次按钮完整完成 OFFBOARD、解锁、相对起点 1 m 起飞、稳定悬停 5 s、AUTO.LAND、落地上锁；
+- 全过程中 OFFBOARD 阶段 setpoint 不断流；
+- 起飞 x/y 不主动偏离起点；
+- 悬停计时从到达并稳定后开始，不从按键时开始；
+- 重复按键不会启动第二个任务；
+- 飞手切出 OFFBOARD 后程序不抢回；
+- 节点重启不会自动起飞；
+- 定位无效时拒绝启动；
+- AUTO.LAND 确认后不再发送新的飞行目标或重新申请 OFFBOARD；
+- 没有强制空中上锁路径；
+- 所有参数、启动命令、测试命令和风险写入本包 README。
+
+十二、交付物
+
+请输出并实现：
+
+1. 建议的 ROS1 包文件树；
+2. 一键任务节点；
+3. 参数 YAML；
+4. launch 文件；
+5. 状态话题/服务说明；
+6. 单元和集成测试；
+7. SITL 操作说明；
+8. 真机拆桨、系留、首次低高度检查表；
+9. README；
+10. 修改文件清单和仍未解决的安全风险。
+
+在开始写代码前，先读取并汇报当前工作空间真实路径、ROS/MAVROS 版本、现有 fastlio_to_mavros 接口和 PX4 模式名称。发现接口与本文不同，先说明差异，不要静默猜测。
+```
 ### 提示词 1：仓库现状审计与包落点
 
 ```text
@@ -481,4 +706,5 @@ BOOT -> WAIT_FCU -> WAIT_LOCAL_POSE -> CAPTURE_ORIGIN
 > **第一版不要自写 PID。** 2023 的位置误差转速度 PID 留给后续视觉精调；基础起飞、定点、航点、返航优先使用 PX4 自带位置控制器。
 
 > **先保证一号机跑通。** 坐标、持续 setpoint、遥控接管和故障保护未通过前，不要把视觉、抛投、动态降落塞进一个节点。
+
 
