@@ -1,709 +1,1458 @@
 ﻿---
 created: 2026-07-29
 updated: 2026-07-30
-status: 统一需求文档，待在 Orin NX 分步实现
-priority: 一号机当前最高主线
+status: 唯一主文档，当前只执行阶段一
+priority: 一号机最高优先级
 platform: ROS1 Noetic + MAVROS + PX4 1.13.3 + FAST-LIO2 + MID360
-first_script: one_key_takeoff_hover_land.py
-scope: 架构、坐标约定、分阶段需求与开发提示词，不含实际飞行代码
+current_task: SLAM高度自动起飞、悬停5秒、AUTO.LAND
+work_target: /home/password123456/catkin_ws/src/px4_basic_control
 ---
 
-# PX4 位置控制功能包统一需求、架构与分步提示词
+# PX4 室内 SLAM 自动起降开发总说明与阶段一提示词
 
-> 本文是当前 PX4 室内位置控制功能包的唯一主需求文档，已经合并原《PX4 飞机控制功能包架构与首个 Python 一键起降脚本提示词》和原《PX4 位置控制功能包需求与分步提示词》。
+> **这是当前 PX4 室内位置控制工作的唯一入口文档。**
 >
-> 当前第一目标不是恢复 EGO-Planner 的 `px4ctrl`，也不是立即开发完整航点、视觉伴飞和抛投，而是先完成一个最小、可验证、安全可接管的闭环：**以 H 起降点和精确摆放的初始机头方向建立任务坐标系，使用 SLAM 约束的高度完成自动起飞到相对 1 m、悬停 5 s、自动降落；随后再验证沿任务坐标 +X 的小距离移动。**
+> AI 阅读本文后，应能知道：到哪里工作、先看哪些代码、当前只实现什么、运行前怎么手动检查里程计，以及可以直接复制使用的阶段一开发提示词。
+>
+> 当前禁止恢复 EGO-Planner `px4ctrl`，禁止同时开发水平航点、视觉、抛投和双机任务。先保证一号机完成最小自动起飞—悬停—降落闭环。
 
-## 0. 当前不可更改的总体决策
+## 目录与快速入口
 
-1. 飞控使用 **PX4 1.13.3**，通过 **ROS1 MAVROS + OFFBOARD 本地位置 setpoint** 控制。
-2. 第一版只发送位置和 yaw 目标，使用 PX4 原生位置、速度、姿态和推力控制器。
-3. 禁止复用或启动 EGO-Planner `px4ctrl` 控制链。
-4. 禁止发送原始电机、油门、姿态推力和自行计算的悬停油门。
-5. 起飞高度必须来自 SLAM 外部定位链路对 PX4 EKF2 高度的约束，而不是仅依赖未验证的气压计高度。
-6. ROS 控制程序使用 `/mavros/local_position/pose` 作为 PX4 控制闭环反馈；`/Odometry` 用于审计 SLAM 原始结果，不能绕过 PX4 EKF2直接作为飞控反馈。
-7. MAVROS 的 ROS 本地位置接口使用 ROS 侧 ENU/FLU 语义；程序中不重复手工执行 ENU/NED 轴交换。
-8. 所有 OFFBOARD setpoint 必须连续发送，默认 20 Hz，不允许只发一次。
-9. 飞手主动切出 OFFBOARD 后，程序立即退出任务，绝不自动抢回模式。
-10. 第一架飞机验证通过之前，不扩展第二架飞机、视觉抛投或动态伴飞。
+### 最常用入口
 
-## 1. 参考代码结论
+- [[#5.9 现场直接查看三套坐标的命令|查看 SLAM、桥接和 PX4 local 三套坐标]]
+- [[#5.11 推荐的现场对齐实验|拆桨执行前、左、上、左转对齐实验]]
+- [[#5.12 根据实验结果选择对齐方法|判断直接对齐、平移、固定 yaw 或坐标错误]]
+- [[#8. 运行自动起飞脚本前的手动 echo 检查命令|运行脚本前的 rostopic echo/hz 检查]]
+- [[#10. 可直接复制的第一阶段开发提示词|复制第一阶段自动起飞与降落开发提示词]]
+- [[#12. 最短操作记忆版|查看最短启动和测试顺序]]
 
-### 1.1 南邮 2023/2025
+### 完整目录
 
-2023、2025 南京邮电大学代码均使用 **PX4 + MAVROS + OFFBOARD**。可以参考：
+1. [[#1. AI 必须先确认自己在哪里工作|AI 工作路径与版本管理]]
+   - [[#1.1 实际运行代码在 Orin NX|NX 实际路径]]
+   - [[#1.2 开始修改前必须运行|修改前路径检查]]
+   - [[#1.3 版本管理提醒|版本管理提醒]]
+2. [[#2. 当前系统与唯一目标|当前系统与阶段一目标]]
+3. [[#3. 实际数据链路|飞控 IMU、SLAM、桥接与 PX4 数据链]]
+4. [[#4. SLAM 初始化和任务原点|H 点、初始机头和任务原点]]
+5. [[#5. 核心坐标问题：SLAM 坐标能否直接作为 OFFBOARD 目标|SLAM 与 PX4 local 坐标核心问题]]
+   - [[#5.1 PX4 收到视觉位姿后怎样维护内部 NED|PX4 如何维护内部 NED]]
+   - [[#5.2 MAVROS 做什么、不做什么|MAVROS 的 ENU/NED 职责]]
+   - [[#5.3 能不能直接发送 SLAM 坐标 `[0.5, 0, 1.0]`|能否直接发送 SLAM 坐标]]
+   - [[#5.4 我们推荐的稳妥方案|任务坐标到 MAVROS local 转换]]
+   - [[#5.5 本题两个目标最终应该发送什么|起飞 1 m 与前进 0.5 m 最终坐标]]
+   - [[#5.7 南京邮电大学是怎么做的|南邮隐式对齐方式]]
+   - [[#5.9 现场直接查看三套坐标的命令|三套坐标现场查看命令]]
+   - [[#5.10 如果要看 PX4 内部原始 NED 数字|查看 PX4 内部原始 NED]]
+   - [[#5.11 推荐的现场对齐实验|现场坐标对齐实验]]
+   - [[#5.12 根据实验结果选择对齐方法|根据结果选择转换方法]]
+   - [[#5.13 怎样尽量实现真正的隐式对齐|实现隐式对齐的条件]]
+   - [[#5.14 当前实测结果：SLAM 与 PX4 local 已高度数值对齐|查看当前实测对齐数据与四元数结论]]
+6. [[#6. AI 必须阅读的参考代码|南邮、CUADC 与当前工程参考代码]]
+   - [[#6.1 南京邮电大学 2025：第一参考，写代码前必须先读|南邮 2025 第一参考]]
+   - [[#6.2 南京邮电大学 2023：第二参考|南邮 2023 第二参考]]
+   - [[#6.3 CUADC ArduPilot：仅参考程序结构|CUADC 参考边界]]
+7. [[#7. 启动前先确认使用的是飞控 IMU|确认 FAST-LIO 使用飞控 IMU]]
+8. [[#8. 运行自动起飞脚本前的手动 echo 检查命令|运行前手动检查命令]]
+   - [[#8.1 检查飞控与飞控 IMU|飞控与 IMU]]
+   - [[#8.2 检查 FAST-LIO `/Odometry`|FAST-LIO 里程计]]
+   - [[#8.3 手动抬高检查 SLAM Z|SLAM Z 抬高测试]]
+   - [[#8.4 检查桥接输出|桥接输出]]
+   - [[#8.5 检查 PX4 融合本地位置|PX4 local 位置]]
+   - [[#8.6 自动起飞前最后一次状态检查|自动起飞前最终检查]]
+9. [[#9. 第一阶段控制逻辑|自动起飞、悬停 5 秒和 AUTO.LAND 状态机]]
+10. [[#10. 可直接复制的第一阶段开发提示词|第一阶段完整复制提示词]]
+11. [[#11. 后续阶段只保留名称，本次不执行|后续阶段边界]]
+12. [[#12. 最短操作记忆版|最短操作记忆版]]
 
-- 连续 setpoint 发布；
-- OFFBOARD 预发送；
-- 航点状态机；
-- 到点判定；
-- 任务控制器与底层发布器分离。
+---
 
-不能直接照搬：
+## 1. AI 必须先确认自己在哪里工作
 
-- 固定以 `(0,0,0)` 作为飞控原点；
-- 只减初始 z、x/y 和四元数原样透传的桥接方式；
-- 默认 SLAM 地图、PX4 local 和比赛地图天然重合的隐含假设。
+### 1.1 实际运行代码在 Orin NX
 
-参考文件：
-
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/README.md]]
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/odom_to_pose_node.cpp]]
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/base_controller.cpp]]
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/task_controller.cpp]]
-- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2023电赛H南邮飞控代码/2023_final-offboard/src/training/src/2023.cpp]]
-
-### 1.2 CUADC ArduPilot 参考边界
-
-CUADC 使用 ArduPilot `GUIDED`。只参考等待连接、状态确认、超时、日志、任务授权和安全退出的软件结构，不复制：
-
-- `GUIDED`；
-- AP 专用 takeoff；
-- RTL；
-- WGS84 全局目标；
-- AP 模式名称和服务语义。
-
-## 2. 比赛任务坐标系与物理摆放
-
-### 2.1 物理初始化流程
-
-每次建立新地图前执行：
-
-1. 将飞机机体控制中心放在 H 起降点中心；
-2. 精确调整机头，使机头沿比赛地图 5 m 长边并朝向场地内部；
-3. 飞机保持水平、静止，周围人员不要碰动飞机；
-4. 启动 MAVROS 并确认飞控连接；
-5. 启动 MID360、FAST-LIO2；
-6. 等待 SLAM 初始化和静止收敛；
-7. 启动或确认 `fastlio_to_mavros` 桥接；
-8. 等待 PX4 EKF2 正确融合外部视觉位置/高度；
-9. 完成坐标方向审计后，锁存任务原点；
-10. 最后才允许进入 POSCTL/OFFBOARD 测试。
-
-### 2.2 任务坐标 `mission`
-
-统一定义：
+当前机载电脑用户名和主目录：
 
 ```text
-原点 O_M：H 起降点处飞机的初始控制参考点
-+X_M：初始机头前方，即地图长边朝场地内部
-+Y_M：飞机初始左侧，即保持右手系
-+Z_M：竖直向上
-yaw_M=0：机头指向 +X_M
-正 yaw_M：从上往下看逆时针左转
+/home/password123456
 ```
 
-任务坐标是比赛业务层唯一使用的坐标。航点 YAML、起飞高度、前进距离和返航目标均使用 `mission`，不直接写 PX4 NED 数值。
+实际 ROS 工作目录：
 
-### 2.3 “SLAM 的 0,0,0”必须说清参考点
+| 内容 | NX 实际路径 |
+|---|---|
+| ROS 主工作空间 | `/home/password123456/catkin_ws` |
+| 本次新功能包目标 | `/home/password123456/catkin_ws/src/px4_basic_control` |
+| FAST-LIO→MAVROS 桥接包 | `/home/password123456/catkin_ws/src/fastlio_to_mavros` |
+| 旧 `px4ctrl`，本阶段禁止使用 | `/home/password123456/catkin_ws/src/px4ctrl` |
+| 工作空间工具脚本 | `/home/password123456/catkin_ws/tools` |
+| FAST-LIO2 源码 | `/home/password123456/fast_lio2_ws/src/FAST_LIO` |
+| Livox ROS 驱动 | `/home/password123456/livox_ws/src/livox_ros_driver2` |
+| LiDAR-IMU 标定工程 | `/home/password123456/lidar_imu_init_ws/src/LiDAR_IMU_Init` |
+| 飞机上的同名 `slam-drone` 参考仓库 | `/home/password123456/slam-drone` |
+| 飞机上的南邮 2025 第一参考代码 | `/home/password123456/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard` |
+| 飞机上的南邮 2023 第二参考代码 | `/home/password123456/slam-drone/2023电赛H南邮飞控代码/2023_final-offboard/src/training/src` |
 
-用户设计为：飞机在 H 点按规定朝向静止，SLAM 初始化时将初始位置锁定为 `(0,0,0)`。该思路可行，但必须区分：
-
-- LiDAR 光心/雷达坐标原点；
-- FAST-LIO 输出的 `body` 或 IMU 参考点；
-- PX4 IMU/机体控制参考点；
-- 比赛定义的 H 点机体中心。
-
-第一版推荐：
-
-> **SLAM 地图可以在初始化雷达/IMU位姿处建立零点，但任务控制原点应定义为初始化时飞机机体控制参考点，并通过固定外参把雷达/SLAM参考点统一到 body/IMU参考点。**
-
-如果 FAST-LIO `/Odometry` 已经输出 `camera_init -> body`，则不得再次把其位置误认为原始 LiDAR 光心位置。必须检查实际 `frame_id`、`child_frame_id` 和外参使用方式。
-
-仅仅将初始 xyz 做减法不能解决旋转时的杆臂效应。完整桥接应采用同一个刚体变换同时处理位置与姿态：
+如果 AI 当前只能看到 Windows Obsidian 仓库：
 
 ```text
-T_L_S = T_L_B0 · inverse(T_S_B0)
-T_L_B(t) = T_L_S · T_S_B(t)
+D:\文档\14_OBSIDIAN智能数据综合管理系统
 ```
 
-其中：
+则这里只是文档和参考代码，不是无人机实际运行的 `catkin_ws`。不要把飞行包误写进历史参考源码目录。应先连接/打开 NX 的：
 
 ```text
-S：SLAM map/camera_init
-L：MAVROS/PX4 local 的 ROS 表达
-B：飞机 body/IMU 控制参考点
+/home/password123456/catkin_ws
 ```
 
-### 2.4 物理摆正不代表软件坐标必然正确
+### 1.2 开始修改前必须运行
 
-飞机机头沿地图长边摆放，只是建立了一个明确的物理基准。仍需实测确认：
+```bash
+pwd
+ls -la ~/catkin_ws/src
+rospack find fastlio_to_mavros
+rospack find fast_lio
+ls -la ~/catkin_ws/tools
+```
 
-- FAST-LIO `+X` 是否真的是初始机头前方；
-- FAST-LIO `+Y` 是否为初始左侧；
-- FAST-LIO `+Z` 是否向上；
-- 左转时 yaw 是否增加；
-- 桥接后 `/mavros/local_position/pose` 的相对增量是否一致。
+如果这些路径与本文不一致，先输出实际路径和差异，不能凭文档猜测后直接写代码。
 
-如果前移 0.5 m 后 `/Odometry` 增加的不是预期轴，必须通过坐标变换修正，不能只改 `frame_id`。
+### 1.3 版本管理提醒
 
-## 3. 三层坐标架构
+`~/catkin_ws` 是实际运行目录，但历史审计显示它不一定处于当前文档仓库的 Git 跟踪范围内。AI 修改前必须：
 
-### 3.1 SLAM 坐标 `S`
+```bash
+cd ~/catkin_ws
+git status 2>/dev/null || true
+```
 
-FAST-LIO 自己建立的局部地图坐标，如 `camera_init`。其原点和 yaw 由本次初始化决定。
+若没有 Git 仓库，至少备份将要修改的包或明确列出新增文件，不能覆盖旧控制代码。
 
-### 3.2 MAVROS/PX4 本地坐标 `L`
+---
 
-- PX4 内部维护 NED；
-- MAVROS 在 ROS 侧提供 ENU/FLU 接口；
-- `/mavros/local_position/pose` 是 PX4 EKF2 融合结果在 ROS 侧的表达；
-- `/mavros/setpoint_position/local` 接收 ROS 侧本地位置目标。
+## 2. 当前系统与唯一目标
 
-MAVROS负责标准 ENU/NED 和 FLU/FRD 转换，但不知道 H 点、地图长边和 SLAM 初始 yaw。
-
-### 3.3 比赛任务坐标 `M`
-
-`mission` 原点为 H 点，轴方向由初始机头决定。任务代码只产生 `M` 中的目标，由 `coordinate_manager` 唯一转换到 `L`。
-
-## 4. SLAM 高度必须进入 PX4 控制闭环
-
-### 4.1 “使用 SLAM 的 Z 高度”的正确含义
-
-第一阶段不能采用：
+### 2.1 硬件和软件
 
 ```text
-脚本直接读取 /Odometry.z
--> 自己算油门或速度
--> 绕过 PX4 EKF2
+Pixhawk 4
+PX4 1.13.3
+Orin NX
+ROS1 Noetic
+Livox MID360
+FAST-LIO2
+MAVROS
+fastlio_to_mavros
 ```
 
-正确链路是：
+本阶段要求 FAST-LIO2 使用飞控 IMU：
 
 ```text
-FAST-LIO /Odometry.z
--> 完整坐标/外参桥接
--> /mavros/vision_pose/pose.z
--> PX4 EKF2 融合外部视觉位置/高度
--> /mavros/local_position/pose.z
--> OFFBOARD位置目标
--> PX4原生位置控制器
+/mavros/imu/data_raw
 ```
 
-因此，脚本反馈仍读取 `/mavros/local_position/pose.z`，但在飞行前必须证明这个 z 已由 SLAM 外部视觉高度约束。
-
-### 4.2 PX4 配置要求
-
-在 PX4 1.13.3/QGC 中检查并记录：
-
-- EKF2 已启用 External Vision position；
-- 高度参考选择包含或使用 Vision，满足本项目“SLAM 高度为主”的要求；
-- 外部视觉延迟参数经过实际测量；
-- EV 参考点外参没有重复填写；
-- 是否融合 vision yaw 与桥接姿态能力一致；
-- 气压计、测距仪是否作为备用/降落辅助，要明确记录；
-- 停止 SLAM/桥接后的 EKF 和 failsafe 行为经过验证。
-
-不要在需求文档里硬编码未经 QGC 当前固件确认的参数数字；实现前读取并保存实际参数快照。
-
-### 4.3 SLAM Z 生效的拆桨验证
-
-静止初始化后记录：
+而不是默认使用：
 
 ```text
-/Odometry.z
-/mavros/vision_pose/pose.z
-/mavros/local_position/pose.z
+/livox/imu
 ```
 
-拆桨抬高整机约 0.30 m，再放回 H 点，必须满足：
-
-1. 三路 z 都是向上增加；
-2. 三路相对增量接近 0.30 m；
-3. 放回后相对高度接近零；
-4. 不出现正负号相反；
-5. 不出现持续跳变或明显延迟；
-6. 停止桥接后 PX4 能识别定位失效，而不是永久使用旧数据。
-
-只有话题存在不算通过，必须在 QGC/PX4 日志中确认外部视觉高度正在融合。
-
-## 5. 任务原点的锁存
-
-在 SLAM、桥接和 EKF2 全部稳定后，锁存：
-
-```text
-SLAM初始位姿：p_S0, yaw_S0
-MAVROS local初始位姿：p_L0=[x_L0,y_L0,z_L0], yaw_L0
-任务位姿：p_M0=[0,0,0], yaw_M0=0
-```
-
-禁止假设：
-
-```text
-x_L0 = 0
-y_L0 = 0
-z_L0 = 0
-yaw_L0 = 0
-```
-
-因为即使 SLAM 初始化为零，PX4 EKF2/MAVROS local 的原点和 yaw 也未必数值为零。
-
-## 6. 任务坐标到 MAVROS local 的转换
-
-### 6.1 通用公式
-
-若任务坐标 `+X_M` 定义为初始化机头前方，并锁存 MAVROS local 初始 yaw `yaw_L0`：
-
-```text
-x_L_sp = x_L0 + cos(yaw_L0)·x_M - sin(yaw_L0)·y_M
-y_L_sp = y_L0 + sin(yaw_L0)·x_M + cos(yaw_L0)·y_M
-z_L_sp = z_L0 + z_M
-yaw_L_sp = wrap(yaw_L0 + yaw_M)
-```
-
-该公式由唯一的 `coordinate_manager` 实现。其他节点不得再次旋转或交换坐标轴。
-
-### 6.2 沿比赛地图/任务 +X 前进时发什么
-
-任务目标若为：
-
-```text
-沿初始机头方向前进 d 米
-保持起飞高度 h
-保持初始航向
-```
-
-任务层目标是：
-
-```text
-[x_M, y_M, z_M, yaw_M] = [d, 0, h, 0]
-```
-
-转换后向 `/mavros/setpoint_position/local` 连续发送：
-
-```text
-x_sp = x_L0 + d·cos(yaw_L0)
-y_sp = y_L0 + d·sin(yaw_L0)
-z_sp = z_L0 + h
-yaw_sp = yaw_L0
-```
-
-示例：
-
-| 初始 MAVROS yaw | 沿任务 +X 前进 d 的 local 目标 |
-|---:|---|
-| `0°` | `x=x0+d, y=y0` |
-| `+90°` | `x=x0, y=y0+d` |
-| `-90°` | `x=x0, y=y0-d` |
-| `180°` | `x=x0-d, y=y0` |
-
-所以不能在所有情况下都直接发送：
-
-```text
-[x0+d, y0, z0+h]
-```
-
-只有实测确认任务 +X 已与 MAVROS local +X 数值对齐，且 `yaw_L0≈0` 时，这个简化写法才成立。
-
-### 6.3 不直接向 MAVROS 发送 NED
-
-控制节点发布 `geometry_msgs/PoseStamped` 到：
-
-```text
-/mavros/setpoint_position/local
-```
-
-使用 MAVROS ROS 本地坐标语义。不要把上面的目标再手工换成 `North/East/Down`，否则会发生重复转换。
-
-## 7. 第一阶段：SLAM Z 自动起飞、悬停、降落 MVP
-
-### 7.1 目标
+### 2.2 第一阶段唯一任务
 
 人工触发一次后：
 
 ```text
-确认 FCU、SLAM、桥接、EKF2 和 POSCTL 正常
--> 锁存 p_L0/yaw_L0
--> 连续预发送当前点 HOLD
--> ARM
--> 进入并确认 OFFBOARD
--> 平滑升高到 z_L0 + 1.0 m
--> 稳定保持 1 s
--> 悬停 5 s
--> 请求 AUTO.LAND
--> 不再抢回 OFFBOARD
--> 监视落地和 PX4 自动上锁
+检查SLAM、桥接、PX4本地位置和POSCTL
+→ 锁存x0、y0、z0、yaw0
+→ 连续预发送当前位置setpoint
+→ 请求OFFBOARD
+→ 解锁
+→ 平滑上升到相对起点0.5m（通过后再改1.0m）
+→ 稳定悬停5秒
+→ 请求AUTO.LAND
+→ 等待PX4自动降落和上锁
 ```
 
-首次真机高度必须先改为 `0.5 m`，通过后才能测试 `1.0 m`。
+第一阶段不实现：
 
-### 7.2 起飞控制
+- 沿 X/Y 飞行；
+- 航点和比赛任务；
+- EGO-Planner；
+- `px4ctrl`；
+- 视觉识别和抛投；
+- 原始姿态、推力、油门和电机控制；
+- 飞手切出 OFFBOARD 后自动抢回。
 
-起飞目标不是固定 `(0,0,1)`，而是：
+---
+
+## 3. 实际数据链路
+
+### 3.1 飞控 IMU 驱动 FAST-LIO2
 
 ```text
-x_sp = x_L0
-y_sp = y_L0
-z_sp = z_L0 + takeoff_height
+Pixhawk IMU
+→ MAVROS
+→ /mavros/imu/data_raw
+→ FAST-LIO2
+→ /Odometry
+```
+
+目标 FAST-LIO 配置应明确包含：
+
+```yaml
+common:
+  imu_topic: /mavros/imu/data_raw
+```
+
+已知配置候选：
+
+```text
+/home/password123456/fast_lio2_ws/src/FAST_LIO/config/mid360_mavros.yaml
+```
+
+不能仅凭文件名判断配置已生效。必须检查实际 launch 加载的 YAML 和运行中的 ROS 参数。
+
+### 3.2 SLAM 位姿送进 PX4
+
+```text
+FAST-LIO2 /Odometry
+→ fastlio_to_mavros
+→ /mavros/vision_pose/pose
+→ MAVROS/MAVLink
+→ PX4 EKF2 External Vision融合
+→ /mavros/local_position/pose
+```
+
+### 3.3 自动起飞的高度反馈
+
+自动起飞主闭环使用：
+
+```text
+/mavros/local_position/pose.z
+```
+
+同时监视：
+
+```text
+/Odometry.z
+/mavros/vision_pose/pose.z
+```
+
+职责分工：
+
+| 高度 | 用途 |
+|---|---|
+| `/Odometry.z` | FAST-LIO 原始高度健康检查 |
+| `/mavros/vision_pose/pose.z` | 桥接结果检查 |
+| `/mavros/local_position/pose.z` | PX4 实际控制反馈和到达判断 |
+
+使用 `local_position.z` 不等于放弃 SLAM 高度。只要 PX4 EKF2 正确融合 External Vision 高度，它就是 PX4 位置控制器正在使用的、受 SLAM 约束的高度。
+
+如果直接用原始 `/Odometry.z` 判断到达，而 PX4 EKF2 的 `local_position.z` 与它不一致，就会出现脚本认为到达、PX4仍继续爬升的冲突。因此原始 SLAM Z 用于交叉验证，不代替 PX4 控制反馈。
+
+---
+
+## 4. SLAM 初始化和任务原点
+
+每次启动前：
+
+1. 飞机中心放在 H 起飞点；
+2. 机头沿比赛地图长边朝场地内部；
+3. 飞机保持静止；
+4. 启动 MAVROS，确认飞控 IMU 数据；
+5. 启动使用 `/mavros/imu/data_raw` 的 FAST-LIO2；
+6. 将本次 SLAM 初始化位置视为 SLAM 地图零点；
+7. 启动桥接；
+8. 等待 PX4 EKF2 外部定位稳定；
+9. 手动确认 `POSCTL` 可以稳定定点；
+10. 最后才运行自动起降节点并人工触发。
+
+本项目任务坐标：
+
+```text
+原点：H点初始化位置
++X：初始机头前方，沿地图长边朝场地内部
++Y：初始机体左侧
++Z：竖直向上
+yaw=0：初始机头方向
+```
+
+第一阶段尚不使用水平任务坐标，只保持触发时的 x/y/yaw。
+
+---
+
+## 5. 核心坐标问题：SLAM 坐标能否直接作为 OFFBOARD 目标
+
+### 5.1 PX4 收到视觉位姿后怎样维护内部 NED
+
+PX4 收到 `/mavros/vision_pose/pose` 后，不是简单地把 SLAM 的 xyz 复制成内部 NED。实际逻辑是：
+
+```text
+飞控IMU高速积分
+→ EKF2持续预测姿态、速度和NED位置
+
+SLAM外部视觉位姿到达
+→ EKF2把它作为位置/高度/可选yaw观测
+→ 计算观测与当前预测之间的误差
+→ 修正内部NED状态
+→ 输出融合后的vehicle_local_position
+→ MAVROS转换后发布/mavros/local_position/pose
+```
+
+因此 PX4 内部始终维护自己的估计状态。SLAM 是约束和修正来源，不是绕过 EKF2 直接控制电机。
+
+是否融合以下数据由 PX4 1.13.3 的 EKF2 配置决定：
+
+- External Vision 水平位置；
+- External Vision 高度；
+- External Vision yaw；
+- 或 External Vision 坐标系旋转补偿。
+
+如果使用视觉 yaw，PX4 航向可以相对于外部视觉坐标系；如果仍使用磁力计航向或旋转补偿，PX4 local 水平轴可能与 SLAM map 存在固定 yaw 差。
+
+### 5.2 MAVROS 做什么、不做什么
+
+MAVROS 会处理标准坐标约定转换：
+
+```text
+ROS世界坐标：ENU，X/Y/Z = 东/北/上
+PX4内部坐标：NED，X/Y/Z = 北/东/下
+ROS机体坐标：FLU，前/左/上
+PX4机体坐标：FRD，前/右/下
+```
+
+ROS侧位置向量与PX4内部NED可简化理解为：
+
+```text
+x_NED = y_ENU
+y_NED = x_ENU
+z_NED = -z_ENU
+```
+
+控制节点发布 `/mavros/setpoint_position/local` 时使用 ROS/MAVROS local 坐标，不要在 Python 中再次手工交换 ENU/NED。
+
+但是 MAVROS 不知道：
+
+- H 起飞点在哪里；
+- 比赛地图长边在哪里；
+- FAST-LIO 初始化时水平 +X 指向哪里；
+- SLAM 原点与 PX4 local 原点是否相同；
+- SLAM yaw 与 PX4 yaw 相差多少。
+
+这些自定义原点和水平朝向必须由桥接或我们的坐标管理逻辑处理。仅设置 `header.frame_id="map"` 不能完成坐标变换。
+
+### 5.3 能不能直接发送 SLAM 坐标 `[0.5, 0, 1.0]`
+
+只有同时满足以下条件，才可以把 SLAM 目标坐标直接作为 MAVROS local setpoint：
+
+1. SLAM 初始原点与 PX4/MAVROS local 原点数值一致；
+2. SLAM `+X/+Y/+Z` 与 MAVROS local `+X/+Y/+Z` 完全一致；
+3. SLAM yaw=0 与 PX4 local yaw=0 一致；
+4. `/Odometry` 到 `/mavros/vision_pose/pose` 的位置和姿态使用同一个正确刚体变换；
+5. PX4 EKF2 融合后没有发生位置或航向重置；
+6. 手工移动测试证明 `/Odometry` 与 `/mavros/local_position/pose` 的相对增量数值一致。
+
+如果以上条件全部实测通过，那么可以简化为：
+
+```text
+起飞1m：           [0.0, 0.0, 1.0, 0.0]
+前进0.5m并保持1m： [0.5, 0.0, 1.0, 0.0]
+```
+
+但不能因为飞机物理上摆正了，就直接假设软件坐标已经全部对齐。物理摆放只提供初始基准，桥接、EKF2 航向源和 MAVROS local 原点仍需验证。
+
+### 5.4 我们推荐的稳妥方案
+
+飞机在 H 点、机头沿地图长边摆正，SLAM 和 PX4 EKF2 稳定后，分别记录：
+
+```text
+SLAM初始位置：p_S0 = [x_S0, y_S0, z_S0]
+SLAM初始yaw： yaw_S0
+PX4/MAVROS local初始位置：p_L0 = [x_L0, y_L0, z_L0]
+PX4/MAVROS local初始yaw： yaw_L0
+```
+
+定义任务坐标：
+
+```text
+H点 = [0,0,0]
+初始机头前方 = mission +X
+初始左侧 = mission +Y
+竖直向上 = mission +Z
+```
+
+任务坐标到 MAVROS local 的水平旋转为：
+
+```text
+delta_yaw = yaw_L0 - yaw_S0
+```
+
+通用位置转换：
+
+```text
+p_L_target = p_L0 + Rz(delta_yaw) · p_M_target
+```
+
+如果 SLAM 初始化已经保证 `yaw_S0=0`，任务 `+X` 就是初始机头方向，则：
+
+```text
+x_L_target = x_L0 + cos(yaw_L0)·x_M - sin(yaw_L0)·y_M
+y_L_target = y_L0 + sin(yaw_L0)·x_M + cos(yaw_L0)·y_M
+z_L_target = z_L0 + z_M
+yaw_L_target = yaw_L0 + yaw_M
+```
+
+### 5.5 本题两个目标最终应该发送什么
+
+#### 第一个目标：起飞到相对 1 m
+
+任务目标：
+
+```text
+mission = [0.0, 0.0, 1.0, 0.0]
+```
+
+向 `/mavros/setpoint_position/local` 持续发送：
+
+```text
+[x_L0, y_L0, z_L0+1.0, yaw_L0]
+```
+
+#### 第二个目标：在 1 m 高度沿初始机头/地图 +X 前进 0.5 m
+
+任务目标：
+
+```text
+mission = [0.5, 0.0, 1.0, 0.0]
+```
+
+向 `/mavros/setpoint_position/local` 持续发送：
+
+```text
+x_sp = x_L0 + 0.5·cos(yaw_L0)
+y_sp = y_L0 + 0.5·sin(yaw_L0)
+z_sp = z_L0 + 1.0
 yaw_sp = yaw_L0
 ```
 
-z setpoint 默认以 `0.25 m/s` 的目标爬升速度逐周期平滑推进，禁止从 `z0` 瞬间跳到 `z0+1`。
-
-Python 不估算悬停油门。PX4 根据 SLAM 约束后的本地高度误差计算所需推力。
-
-### 7.3 降落策略
-
-第一版推荐：
+特殊情况：如果实测确认 `yaw_L0≈0` 且任务 +X 已经与 MAVROS local +X 对齐，则可简化为：
 
 ```text
-SLAM Z约束下OFFBOARD起飞和悬停
--> 请求并确认 AUTO.LAND
--> 由PX4执行降落和落地检测
+[x_L0+0.5, y_L0, z_L0+1.0, yaw_L0]
 ```
 
-如果 PX4 的高度参考已配置为 Vision，那么自动降落阶段的估计高度仍受 SLAM Z 约束；但最终触地判断还可能使用 PX4 land detector、推力、速度、气压计或测距仪信息，不能宣称为“只依赖 SLAM”。
+注意：这仍然是 ROS/MAVROS local 坐标，不是由 Python 手工构造的 NED 坐标。MAVROS负责协议侧转换。
 
-第一版禁止在 OFFBOARD 中直接把目标压到地面并强制 disarm。这种方案对地面效应、SLAM近地漂移和落地判断更敏感，必须作为后续独立实验，不进入首飞脚本。
+### 5.6 如果想完全按 SLAM 坐标写任务
 
-### 7.4 第一脚本接口
-
-建议 ROS1 包：
+可以让上层任务始终只写：
 
 ```text
-px4_basic_control
+TAKEOFF = [0.0, 0.0, 1.0, 0.0]
+FORWARD = [0.5, 0.0, 1.0, 0.0]
 ```
 
-第一脚本：
+但必须在中间设置唯一的 `coordinate_manager`：
 
 ```text
-scripts/one_key_takeoff_hover_land.py
+SLAM/mission目标
+→ 原点平移和yaw旋转
+→ MAVROS local目标
+→ /mavros/setpoint_position/local
+→ MAVROS自动ENU/NED转换
+→ PX4 OFFBOARD
 ```
 
-人工触发服务：
+这样比赛任务层使用直观的 SLAM/地图坐标，底层统一负责转换。禁止每个任务脚本各自交换 X/Y 或正负号。
+
+### 5.7 南京邮电大学是怎么做的
+
+南邮 2025 的桥接代码：
 
 ```text
-/uav/run_one_key_takeoff_hover_land
-std_srvs/Trigger
+x：/Odometry.x 原样发送
+y：/Odometry.y 原样发送
+z：减去最开始10帧z平均值
+orientation：四元数原样发送
+frame_id：写成map
 ```
 
-节点启动后只能进入监视状态，禁止自动起飞。任务执行中重复触发必须拒绝。
-
-### 7.5 输入输出
-
-订阅：
+起飞阶段持续发送：
 
 ```text
-/mavros/state
+[0.0, 0.0, 1.1, 0.0]
+```
+
+他们后续航点示例包括：
+
+```text
+[0.0, -4.0, 1.0, 0.0]
+[1.6, -4.0, 1.0, 0.0]
+[1.6, 0.0, 1.0, 0.0]
+```
+
+这说明南邮直接把自己任务地图里的坐标发送给 `/mavros/setpoint_position/local`。他们的做法依赖一个隐含前提：
+
+```text
+SLAM地图坐标 ≈ MAVROS local坐标 ≈ 任务坐标
+```
+
+也就是说，南邮采用的是“通过初始化摆放和系统配置实现隐式对齐，然后直接发送地图绝对坐标”的方式。他们没有在代码中实现完整的 SLAM→PX4 local 原点/yaw转换。
+
+这个方案在他们整套硬件、参数和摆放完全匹配时可以工作，但不能证明复制到我们的飞机后仍然正确。我们的方案应保留南邮的简单任务坐标，同时增加一次显式的初始原点/yaw锁存和转换。
+
+### 5.8 在允许前进0.5m以前必须做的实测
+
+拆桨后，在 H 点启动全部定位链路并记录初值：
+
+```bash
+rostopic echo /Odometry/pose/pose/position
+rostopic echo /mavros/vision_pose/pose/pose/position
+rostopic echo /mavros/local_position/pose/pose/position
+```
+
+手工将飞机沿初始机头方向移动约 `0.30 m`：
+
+- 如果三路都主要表现为 `x增加约0.30m`，可以认为 +X 数值已基本直接对齐；
+- 如果 SLAM x 增加，但 MAVROS local y 增加，说明存在固定水平旋转，必须转换；
+- 如果方向相反，说明存在反号或姿态/坐标配置错误；
+- 如果差异随时间或转动变化，不是简单固定旋转问题，应先修桥接、外参或 EKF2 融合。
+
+通过后，首次带桨水平测试仍按以下顺序：
+
+```text
+0.5m高度起飞
+→ 沿任务+X前进0.30m
+→ 返回H点上方
+→ AUTO.LAND
+```
+
+不能首次就执行 `1m高度 + 前进0.5m`。
+
+### 5.9 现场直接查看三套坐标的命令
+
+先载入环境：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/livox_ws/devel/setup.bash
+source ~/fast_lio2_ws/devel/setup.bash
+source ~/catkin_ws/devel/setup.bash
+```
+
+先确认话题实际存在：
+
+```bash
+rostopic list | grep -E '^/Odometry$|^/mavros/vision_pose/pose$|^/mavros/local_position/pose$|^/mavros/local_position/odom$'
+```
+
+三个核心话题：
+
+| 数据 | 话题 | 含义 |
+|---|---|---|
+| FAST-LIO 原始里程计 | `/Odometry` | SLAM map/camera_init 下的原始位置和姿态 |
+| 桥接发送给飞控的视觉位姿 | `/mavros/vision_pose/pose` | MAVROS ROS侧收到的外部视觉位姿 |
+| PX4 EKF2 融合后返回的本地位姿 | `/mavros/local_position/pose` | PX4内部local经MAVLink返回并由MAVROS转成ROS ENU后的位姿 |
+
+#### 终端一：看 SLAM 原始坐标
+
+```bash
+rostopic info /Odometry
+rostopic hz /Odometry
+rostopic echo /Odometry/pose/pose/position
+```
+
+另开终端查看 SLAM 姿态：
+
+```bash
+rostopic echo /Odometry/pose/pose/orientation
+```
+
+查看一帧完整消息和坐标系：
+
+```bash
+rostopic echo -n 1 /Odometry
+```
+
+重点记录：
+
+```text
+header.frame_id
+child_frame_id
+position.x/y/z
+orientation.x/y/z/w
+```
+
+#### 终端二：看桥接实际发送的数据
+
+```bash
+rostopic info /mavros/vision_pose/pose
+rostopic hz /mavros/vision_pose/pose
+rostopic echo /mavros/vision_pose/pose/pose/position
+```
+
+另开终端查看桥接姿态：
+
+```bash
+rostopic echo /mavros/vision_pose/pose/pose/orientation
+```
+
+如果 `/Odometry` 正常，但此话题没有数据，说明桥接没有运行或话题名称不一致。
+
+#### 终端三：看 PX4 融合后返回的 local 坐标
+
+```bash
+rostopic info /mavros/local_position/pose
+rostopic hz /mavros/local_position/pose
+rostopic echo /mavros/local_position/pose/pose/position
+```
+
+另开终端查看返回姿态：
+
+```bash
+rostopic echo /mavros/local_position/pose/pose/orientation
+```
+
+看一帧完整数据：
+
+```bash
+rostopic echo -n 1 /mavros/local_position/pose
+```
+
+`/mavros/local_position/pose` 是 MAVROS 转换后的 ROS ENU 表达，不是直接显示 PX4 内部 NED 数字。PX4 内部 NED 的 x/y/z 与 MAVROS ROS侧数值会发生标准轴转换。
+
+#### 可选：查看 PX4 返回的本地里程计
+
+先确认话题是否存在：
+
+```bash
+rostopic list | grep /mavros/local_position
+```
+
+如果存在：
+
+```bash
+rostopic echo -n 1 /mavros/local_position/odom
+rostopic hz /mavros/local_position/odom
+```
+
+该话题可以同时查看位置、姿态和速度；实际是否启用取决于当前 MAVROS 插件配置。
+
+#### 终端四：看飞控状态
+
+```bash
+rostopic echo /mavros/state
+```
+
+重点确认：
+
+```text
+connected: true
+mode: 当前实际模式
+armed: 当前解锁状态
+```
+
+### 5.10 如果要看 PX4 内部原始 NED 数字
+
+MAVROS的 `/mavros/local_position/pose` 已经转成ROS ENU。如果需要核对PX4内部原始NED，可在QGroundControl MAVLink Console或可用的PX4 NSH终端执行：
+
+```text
+listener vehicle_local_position 5
+```
+
+重点字段：
+
+```text
+x：NED North方向，米
+y：NED East方向，米
+z：NED Down方向，向上飞时通常变得更负
+```
+
+不要拿这个原始NED数字直接与ROS `/Odometry` 的xyz逐项比较。正确比较对象是：
+
+```text
+SLAM /Odometry
+与
+MAVROS /mavros/local_position/pose
+```
+
+因为二者都处于ROS侧表达；MAVROS已经完成PX4 NED与ROS ENU转换。
+
+### 5.11 推荐的现场对齐实验
+
+全程拆桨，把飞机放在 H 点并精确摆正机头。SLAM、桥接、PX4 EKF2稳定后，记录三路初值：
+
+```text
+S0 = /Odometry.position
+V0 = /mavros/vision_pose/pose.position
+L0 = /mavros/local_position/pose.position
+```
+
+依次做四个动作，每次移动后保持静止数秒：
+
+#### 动作A：沿初始机头/地图 +X 前移 0.30 m
+
+预期：
+
+```text
+ΔS ≈ [+0.30, 0, 0]
+```
+
+观察 `ΔV`、`ΔL` 是否也约为：
+
+```text
+[+0.30, 0, 0]
+```
+
+#### 动作B：向飞机初始左侧/+Y 移动 0.30 m
+
+预期：
+
+```text
+ΔS ≈ [0, +0.30, 0]
+```
+
+#### 动作C：垂直抬高 0.30 m
+
+预期：
+
+```text
+ΔS.z、ΔV.z、ΔL.z 均约为 +0.30m
+```
+
+#### 动作D：原地左转约 30°
+
+预期：
+
+```text
+SLAM yaw增加
+vision yaw增加
+MAVROS local yaw增加
+```
+
+完成后回到 H 点，三路相对位置都应回到零附近。
+
+推荐录包：
+
+```bash
+mkdir -p ~/rosbags
+rosbag record -O ~/rosbags/coordinate_alignment_test.bag \
+  /Odometry \
+  /mavros/vision_pose/pose \
+  /mavros/local_position/pose \
+  /mavros/local_position/odom \
+  /mavros/state \
+  /mavros/imu/data_raw
+```
+
+如果某个可选话题不存在，从命令中删除该话题后再录制。
+
+也可以导出CSV：
+
+```bash
+rostopic echo -p /Odometry > /tmp/slam_odom.csv
+rostopic echo -p /mavros/vision_pose/pose > /tmp/vision_pose.csv
+rostopic echo -p /mavros/local_position/pose > /tmp/px4_local_pose.csv
+```
+
+每条CSV命令需要独立终端运行，按 `Ctrl+C` 停止。
+
+### 5.12 根据实验结果选择对齐方法
+
+#### 情况一：三路相对坐标已经一致
+
+如果：
+
+```text
+ΔS ≈ ΔV ≈ ΔL
+初始yaw也一致
+```
+
+说明已经实现ROS侧隐式对齐。上层任务可以直接使用SLAM/任务坐标：
+
+```text
+[0,0,1,0]
+[0.5,0,1,0]
+```
+
+但工程实现仍建议加入初始平移偏置：
+
+```text
+local_target = local_start + mission_target
+```
+
+避免PX4 local初始值不是严格零。
+
+#### 情况二：只有固定原点偏移
+
+如果：
+
+```text
+ΔS ≈ ΔL
+但S0 != L0
+```
+
+只需要锁存平移：
+
+```text
+p_L_target = p_L0 + (p_S_target - p_S0)
+```
+
+#### 情况三：存在固定yaw旋转
+
+如果SLAM前移表现为MAVROS local斜向或另一轴移动，但旋转关系始终固定，则：
+
+```text
+delta_yaw = yaw_L0 - yaw_S0
+p_L_target = p_L0 + Rz(delta_yaw)·(p_S_target-p_S0)
+```
+
+位置和四元数必须使用同一个旋转，不能只旋转位置。
+
+#### 情况四：轴交换或正负号错误
+
+如果出现：
+
+```text
+SLAM x增加，vision y增加
+SLAM z增加，vision z减少
+```
+
+优先检查桥接是否重复执行了ENU/NED转换、FAST-LIO frame定义和LiDAR/IMU外参。不要在任务脚本中临时加一堆交换和取负来掩盖桥接错误。
+
+#### 情况五：差异随时间或旋转变化
+
+如果无法用一个固定平移和固定yaw解释，则不能称为“坐标未对齐”，而可能是：
+
+- FAST-LIO漂移或初始化异常；
+- 时间戳/延迟错误；
+- LiDAR到IMU/body外参错误；
+- 桥接只转换位置、不转换姿态；
+- PX4视觉yaw与磁力计冲突；
+- EKF2发生位置/yaw reset；
+- 外部视觉数据未真正融合。
+
+这种情况禁止进入OFFBOARD自动飞行。
+
+### 5.13 怎样尽量实现真正的隐式对齐
+
+目标是让ROS侧形成以下闭环：
+
+```text
+SLAM坐标S
+→ bridge发布同坐标语义的vision pose
+→ MAVROS转成PX4协议坐标
+→ PX4 EKF2融合
+→ MAVROS再转回ROS ENU
+→ local坐标L与S数值一致
+```
+
+建议条件：
+
+1. H点启动，机头严格沿SLAM/任务 +X；
+2. FAST-LIO初始化后将初始位置减为零；
+3. 初始姿态设置/变换为 `yaw=0`，并保证body +X为机头前方；
+4. bridge输出ROS右手坐标，+Z向上，位置和四元数采用同一个SE(3)变换；
+5. MAVROS只执行一次标准ENU/NED转换，bridge和任务脚本不重复转换；
+6. PX4使用External Vision position和height；
+7. 若希望PX4航向相对于SLAM地图，应使用正确的External Vision yaw方案；不要同时启用互斥的EV yaw和EV frame rotate策略；
+8. 启动后检查是否发生EKF位置/yaw reset；
+9. 用前、左、上、左转实测证明往返坐标一致。
+
+在该方案中，PX4内部依然可以按NED/FRD维护数据，但这不影响ROS侧直接使用SLAM坐标。关键是经过MAVROS往返转换后：
+
+```text
 /mavros/local_position/pose
+```
+
+应与：
+
+```text
 /Odometry
-/mavros/vision_pose/pose
 ```
 
-发布：
+具有相同的原点、轴方向、尺度和yaw语义。
+
+### 5.14 当前实测结果：SLAM 与 PX4 local 已高度数值对齐
+
+2026-07-30 用户现场取得一组同时刻附近的数据。
+
+SLAM `/Odometry`：
+
+```yaml
+position:
+  x: 0.6336859018181705
+  y: -0.2768001365270483
+  z: -0.015350072231978795
+orientation:
+  x: -0.005249415212621347
+  y: -0.010085896877601806
+  z: -0.4199781139279134
+  w: 0.9074630031827722
+```
+
+PX4 经 MAVROS 返回的 `/mavros/local_position/pose`：
+
+```yaml
+position:
+  x: 0.6330082416534424
+  y: -0.27715712785720825
+  z: -0.015251483768224716
+orientation:
+  x: 0.0013949210742749305
+  y: 0.009115261587944554
+  z: 0.4200015640465187
+  w: -0.9074765657831582
+```
+
+位置差：
 
 ```text
-/mavros/setpoint_position/local
-/uav/basic_control/state
-/uav/basic_control/active_target
-/uav/basic_control/health
+Δx = -0.000678m
+Δy = -0.000357m
+Δz = +0.000099m
+三维位置差模长 ≈ 0.000772m ≈ 0.77mm
 ```
 
-服务：
+四元数模长：
 
 ```text
-/mavros/cmd/arming
-/mavros/set_mode
-/uav/run_one_key_takeoff_hover_land
+|q_slam|  ≈ 1.000000
+|q_local| ≈ 1.000000
 ```
 
-### 7.6 起飞前阻塞条件
-
-任一条件不满足均拒绝任务：
-
-- FCU 未连接；
-- 当前模式不是人工确认的 `POSCTL`；
-- 已解锁或不在地面；
-- SLAM 未初始化；
-- `/Odometry` 超时、NaN、低频或跳变；
-- `/mavros/vision_pose/pose` 超时或与 SLAM 增量不一致；
-- `/mavros/local_position/pose` 超时或不稳定；
-- 未确认 EKF2 正在融合外部视觉高度；
-- 坐标方向审计未通过；
-- `px4ctrl` 或其他 setpoint 发布器仍在运行；
-- 遥控器接管和失控保护未验证。
-
-## 8. 推荐功能包架构
+换算欧拉角约为：
 
 ```text
-px4_basic_control/
-├── CMakeLists.txt
-├── package.xml
-├── README.md
-├── config/
-│   ├── one_key_takeoff_hover_land.yaml
-│   └── coordinate_frames.yaml
-├── launch/
-│   ├── coordinate_audit.launch
-│   └── one_key_takeoff_hover_land.launch
-├── scripts/
-│   ├── coordinate_audit.py
-│   └── one_key_takeoff_hover_land.py
-├── src/px4_basic_control/
-│   ├── __init__.py
-│   ├── vehicle_state_monitor.py
-│   ├── slam_health_monitor.py
-│   ├── coordinate_manager.py
-│   ├── setpoint_streamer.py
-│   ├── mode_manager.py
-│   ├── target_manager.py
-│   ├── arrival_checker.py
-│   └── safety_guard.py
-└── test/
-    ├── test_coordinate_manager.py
-    └── test_takeoff_state_machine.py
+SLAM： roll=-0.060°，pitch=-1.302°，yaw=-49.669°
+PX4：  roll=+0.294°，pitch=-1.015°，yaw=-49.674°
 ```
 
-第一版可以先实现一个脚本中的清晰方法，但接口要允许后续拆分，不能一开始就构造庞大框架。
+两组四元数点积约为：
 
-## 9. 第一脚本状态机
+```text
+q_slam · q_local ≈ -0.999992
+```
+
+这意味着 PX4 四元数基本是 SLAM 四元数的相反数。四元数 `q` 与 `-q` 表示完全相同的三维旋转，因此不能因为四个分量符号相反就判断姿态反了。把 PX4 四元数整体取反后：
+
+```text
+[-0.001395, -0.009115, -0.420002, +0.907477]
+```
+
+与 SLAM 四元数非常接近。按四元数符号等价计算，两者姿态总差约：
+
+```text
+0.46°
+```
+
+#### 当前可以得出的结论
+
+1. 当前时刻 `/Odometry.position` 与 `/mavros/local_position/pose.position` 几乎完全一致；
+2. 当前姿态也基本一致，四元数符号相反属于正常等价表示；
+3. 这表明当前桥接、MAVROS转换和PX4 EKF2融合已经让ROS侧local坐标跟随SLAM坐标；
+4. 很可能已经达成所需的“隐式数值对齐”；
+5. 自动起飞第一阶段可以按当前local起点锁存方式进入开发；
+6. 仍不能仅凭单帧证明前移、左移、抬高和旋转全过程都对齐，带桨前仍要完成动态拆桨验证。
+
+#### 当前 yaw 数值需要正确理解
+
+两路 yaw 都约为：
+
+```text
+-49.67°
+```
+
+这证明两路yaw一致，但不能单独证明飞机机头当前正好对应SLAM地图 `+X`。如果采样时飞机本应严格朝任务 `+X` 且没有转动，那么理论上任务定义希望初始yaw接近 `0°`；当前约 `-49.67°` 需要结合采样时飞机实际朝向判断。
+
+对于第一阶段垂直起飞没有影响，因为脚本锁存并保持当前 `yaw0`。对于后续沿地图 `+X` 前进，必须先执行手工沿机头前移0.30m测试，确认增加的是期望的x轴。
+
+#### 脚本比较四元数时的正确方法
+
+禁止逐分量直接比较：
+
+```text
+qx_slam == qx_local
+qy_slam == qy_local
+...
+```
+
+应先归一化，并使用四元数点积绝对值：
+
+```text
+dot = abs(q_slam · q_local)
+angle_error = 2 * acos(clamp(dot, 0, 1))
+```
+
+因为取绝对值后，`q` 与 `-q` 会被正确判断为同一个姿态。
+
+---
+
+## 6. AI 必须阅读的参考代码
+
+### 6.1 南京邮电大学 2025：第一参考，写代码前必须先读
+
+飞机 NX 上的实际参考目录：
+
+```text
+/home/password123456/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard
+```
+
+当前 Obsidian 仓库中的可点击镜像：
+
+[[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard]]
+
+**强制开发顺序：**
+
+```text
+先进入飞机上的 ~/slam-drone
+→ 逐个阅读南邮2025 offboard源码和配置
+→ 先输出南邮自动起飞、setpoint发布、到达判断和降落逻辑摘要
+→ 再进入 ~/catkin_ws/src/px4_basic_control 编写Python脚本
+```
+
+禁止只根据本文摘要或模型记忆直接开始写代码。南邮仓库只读参考，不在其中修改或新增我们的控制脚本。
+
+重点文件：
+
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/odom_to_pose_node.cpp]]
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/base_controller.cpp]]
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/src/task_controller.cpp]]
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/config/offb_configs.yaml]]
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard/README.md]]
+
+南邮起飞核心逻辑：
+
+```text
+takeoff_height = 1.1m
+持续发布 /mavros/setpoint_position/local
+目标 = [0, 0, 1.1, 0]
+用 /mavros/local_position/pose.z 判断到达
+高度误差阈值 = 0.10m
+```
+
+我们参考它的：
+
+- OFFBOARD 前持续 setpoint；
+- 位置目标起飞；
+- 使用 PX4 local Z 判断到达；
+- 状态机结构。
+
+我们不复制它的：
+
+- 固定 `[0,0,1.1,0]`；
+- 默认坐标原点天然重合；
+- 接近地面后主动/强制上锁；
+- 不完整的坐标和姿态对齐。
+
+### 6.2 南京邮电大学 2023：第二参考
+
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2023电赛H南邮飞控代码/2023_final-offboard/src/training/src/2023.cpp]]
+- [[03_竞赛资料/2026电赛D题无人机资料/slam-drone/2023电赛H南邮飞控代码/2023_final-offboard/src/training/src/2023_pro.cpp]]
+
+只参考 ROS1 MAVROS 的接口写法、持续 setpoint 和任务状态，不复制其历史 PID、比赛任务和不适用于当前系统的逻辑。
+
+### 6.3 CUADC ArduPilot：仅参考程序结构
+
+- [[03_竞赛资料/GDPI_CUADC_2026/README.md]]
+- [[03_竞赛资料/GDPI_CUADC_2026/代码/比赛main工作版本/src/cuadc_control/scripts/one_key_takeoff.py]]
+- [[03_竞赛资料/GDPI_CUADC_2026/代码/比赛main工作版本/src/cuadc_control/scripts/one_key_takeoff_wgs84_forward_rtl.py]]
+
+只参考等待、超时、日志、重复触发拒绝和状态确认。禁止复制 ArduPilot `GUIDED`、AP takeoff、RTL 和 WGS84 控制语义。
+
+### 6.4 当前工程本地参考
+
+- FAST-LIO MAVROS IMU 配置镜像：[[03_竞赛资料/2026电赛D题无人机资料/slam-drone/FAST_LIO/config/mid360_mavros.yaml]]
+- FAST-LIO MAVROS 启动镜像：[[03_竞赛资料/2026电赛D题无人机资料/slam-drone/FAST_LIO/launch/mapping_mid360_mavros.launch]]
+- 2026 载机进度：[[03_竞赛资料/2026电赛D题无人机资料/slam-drone/电赛开发文档/2026电赛载机进度记录.md]]
+
+以 NX 实际文件为准，Windows 仓库镜像只能作为对照。
+
+---
+
+## 7. 启动前先确认使用的是飞控 IMU
+
+### 7.1 载入环境
+
+每个新终端执行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/livox_ws/devel/setup.bash
+source ~/fast_lio2_ws/devel/setup.bash
+source ~/catkin_ws/devel/setup.bash
+```
+
+### 7.2 不要盲目运行旧一键启动脚本
+
+机载存在：
+
+```bash
+bash ~/catkin_ws/tools/start_uav_stack.sh
+```
+
+但历史审计显示 FAST-LIO 默认路线可能使用 MID360 内置 IMU `/livox/imu`。本阶段要求飞控 IMU，因此运行前先检查：
+
+```bash
+grep -R "imu_topic" -n ~/fast_lio2_ws/src/FAST_LIO/config ~/catkin_ws/tools
+cat ~/fast_lio2_ws/src/FAST_LIO/config/mid360_mavros.yaml
+sed -n '1,240p' ~/catkin_ws/tools/start_uav_stack.sh
+```
+
+启动 FAST-LIO 后检查运行参数：
+
+```bash
+rosparam list | grep imu_topic
+rosparam get /common/imu_topic
+```
+
+预期是：
+
+```text
+/mavros/imu/data_raw
+```
+
+再检查订阅关系：
+
+```bash
+rostopic info /mavros/imu/data_raw
+```
+
+输出的 `Subscribers` 中应看到 FAST-LIO 节点，通常为 `/laserMapping`。如果没有，不能继续自动起飞开发测试。
+
+---
+
+## 8. 运行自动起飞脚本前的手动 echo 检查命令
+
+> 以下命令只读，不会解锁、切模式或发送 setpoint。先拆桨完成检查。
+
+### 8.1 检查飞控与飞控 IMU
+
+```bash
+rostopic echo -n 1 /mavros/state
+rostopic info /mavros/imu/data_raw
+rostopic hz /mavros/imu/data_raw
+rostopic echo -n 1 /mavros/imu/data_raw
+```
+
+通过条件：
+
+- `/mavros/state.connected: true`；
+- IMU 连续发布；
+- 时间戳持续更新；
+- 加速度和角速度不是 NaN/Inf；
+- 历史实测期望频率约 180–200 Hz，实际以当前配置为准；
+- FAST-LIO 节点确实订阅 `/mavros/imu/data_raw`。
+
+### 8.2 检查 FAST-LIO `/Odometry`
+
+先检查话题来源和频率：
+
+```bash
+rostopic info /Odometry
+rostopic hz /Odometry
+```
+
+打印一帧完整里程计：
+
+```bash
+rostopic echo -n 1 /Odometry
+```
+
+只连续观察位置，按 `Ctrl+C` 停止：
+
+```bash
+rostopic echo /Odometry/pose/pose/position
+```
+
+只观察姿态四元数：
+
+```bash
+rostopic echo /Odometry/pose/pose/orientation
+```
+
+只观察消息头和坐标系：
+
+```bash
+rostopic echo -n 1 /Odometry/header
+rostopic echo -n 1 /Odometry/child_frame_id
+```
+
+预期通常为：
+
+```text
+header.frame_id: camera_init
+child_frame_id: body
+```
+
+静止通过条件：
+
+- `/Odometry` 连续发布，不间歇停止；
+- `header.stamp` 持续增加；
+- x/y/z 和四元数均为有限值；
+- 飞机静止时位置只允许小幅噪声，不应持续单方向快速漂移；
+- 四元数不应全零；
+- RViz 地图和点云不应持续抖动、分层或发散。
+
+### 8.3 手动抬高检查 SLAM Z
+
+终端一：
+
+```bash
+rostopic echo /Odometry/pose/pose/position
+```
+
+保持飞机静止，记录初始 z；拆桨后将整机垂直抬高约 `0.30 m`。
+
+通过条件：
+
+```text
+/Odometry.z 相对增加约 +0.30m
+放回原位置后，z回到初始值附近
+```
+
+如果抬高时 z 减少，说明方向不符合当前 ROS +Z 向上的预期，禁止继续自动起飞。
+
+### 8.4 检查桥接输出
+
+```bash
+rostopic info /mavros/vision_pose/pose
+rostopic hz /mavros/vision_pose/pose
+rostopic echo -n 1 /mavros/vision_pose/pose
+rostopic echo /mavros/vision_pose/pose/pose/position
+```
+
+通过条件：
+
+- 发布者是当前 `fastlio_to_mavros` 桥接节点；
+- 数据连续、时间戳更新；
+- 抬高飞机时 vision pose 的 z 同样增加；
+- 与 `/Odometry.z` 的相对变化尺度一致；
+- 不出现启动瞬间持续大跳变。
+
+如果 MAVROS、FAST-LIO 已经启动但桥接没有启动，可单独启动：
+
+```bash
+roslaunch fastlio_to_mavros bridge_only.launch
+```
+
+不要在未检查 launch 内容时直接使用 `full_system.launch`，避免它加载错误的 FAST-LIO IMU 配置。
+
+### 8.5 检查 PX4 融合本地位置
+
+```bash
+rostopic info /mavros/local_position/pose
+rostopic hz /mavros/local_position/pose
+rostopic echo -n 1 /mavros/local_position/pose
+rostopic echo /mavros/local_position/pose/pose/position
+```
+
+再次拆桨抬高约 `0.30 m`，比较：
+
+```text
+Δz_slam   = /Odometry.z 的变化
+Δz_vision = /mavros/vision_pose/pose.z 的变化
+Δz_local  = /mavros/local_position/pose.z 的变化
+```
+
+通过条件：
+
+```text
+Δz_slam ≈ Δz_vision ≈ Δz_local ≈ +0.30m
+```
+
+还必须在 QGC/PX4 Estimator 状态或 `.ulg` 日志中确认 External Vision 高度正在融合。仅仅看到 `/mavros/local_position/pose` 有数值，不足以证明 SLAM 高度已被使用。
+
+### 8.6 自动起飞前最后一次状态检查
+
+```bash
+rostopic echo -n 1 /mavros/state
+rostopic echo -n 1 /mavros/extended_state
+rosnode list | grep -E "px4ctrl|ego|offboard|setpoint"
+rostopic info /mavros/setpoint_position/local
+```
+
+要求：
+
+- 飞机在地面；
+- 自动起飞脚本启动前未解锁；
+- 人工确认 `POSCTL` 能正常定点；
+- 没有 `px4ctrl`；
+- 没有其他节点同时发布 MAVROS setpoint；
+- 遥控器模式开关可以立即切出 OFFBOARD；
+- 螺旋桨测试遵守“先拆桨、再系留、再 0.5 m”的顺序。
+
+---
+
+## 9. 第一阶段控制逻辑
+
+### 9.1 南邮逻辑和我们的修改
+
+南邮发送：
+
+```text
+[0, 0, 1.1, 0]
+```
+
+我们的脚本触发时先锁存：
+
+```text
+x0 = 当前 /mavros/local_position/pose.x
+y0 = 当前 /mavros/local_position/pose.y
+z0 = 当前 /mavros/local_position/pose.z
+yaw0 = 当前姿态yaw
+```
+
+然后持续发送：
+
+```text
+[x0, y0, z0 + takeoff_height, yaw0]
+```
+
+首次真机：
+
+```text
+takeoff_height = 0.5m
+```
+
+通过后：
+
+```text
+takeoff_height = 1.0m
+```
+
+### 9.2 setpoint 和状态机
 
 ```text
 IDLE
--> VALIDATE_START
--> CAPTURE_START_POSE
--> PRESTREAM_HOLD
--> REQUEST_ARM / WAIT_ARMED
--> REQUEST_OFFBOARD / WAIT_OFFBOARD
--> RAMP_TAKEOFF_SETPOINT
--> WAIT_AT_HEIGHT
--> HOVER_5S
--> REQUEST_AUTO_LAND
--> WAIT_AUTO_LAND
--> MONITOR_LANDING
--> WAIT_DISARMED
--> COMPLETE
--> IDLE
+→ VALIDATE
+→ CAPTURE_START
+→ PRESTREAM_HOLD
+→ REQUEST_OFFBOARD
+→ REQUEST_ARM
+→ TAKEOFF
+→ WAIT_STABLE
+→ HOVER_5S
+→ REQUEST_AUTO_LAND
+→ MONITOR_LANDING
+→ COMPLETE
 ```
 
-异常路径统一进入：
+要求：
+
+- 节点启动绝不自动起飞；
+- 必须通过 `std_srvs/Trigger` 人工触发；
+- 独立定时器默认 20 Hz 持续发布 setpoint；
+- OFFBOARD 前先发送当前位置 HOLD 至少 2 秒；
+- 只有确认 `armed=true` 且 `mode=OFFBOARD` 后才提高 z；
+- z 目标按默认 `0.25 m/s` 平滑推进；
+- x/y/yaw 始终保持起点；
+- 高度误差不超过 `0.10 m`、水平误差不超过 `0.15 m`，连续稳定 1 秒才算到达；
+- 到达后继续发送同一目标并稳定悬停 5 秒；
+- 悬停结束请求 `AUTO.LAND`；
+- 飞手主动切出 OFFBOARD 后立即停止任务，绝不抢回；
+- 禁止空中强制 disarm；
+- 禁止发布姿态推力、油门或电机命令。
+
+---
+
+## 10. 可直接复制的第一阶段开发提示词
+
+> 复制下面整个代码块交给负责在 Orin NX 上开发的 AI。
 
 ```text
-ABORT / PILOT_TAKEOVER / FAILSAFE_MONITOR
+你现在要在Orin NX上完成一号无人机的第一阶段任务：使用PX4 1.13.3、ROS1 Noetic、MAVROS、MID360、FAST-LIO2和fastlio_to_mavros，实现一个最小、安全、可人工触发的“SLAM高度自动起飞—悬停5秒—AUTO.LAND”Python脚本。只做这一项，不开发水平移动、航点、视觉、抛投、EGO-Planner或px4ctrl。
+
+【实际工作路径】
+飞机上存在同名参考仓库/home/password123456/slam-drone，实际运行工作空间是/home/password123456/catkin_ws。新建功能包目标为/home/password123456/catkin_ws/src/px4_basic_control。当前桥接包在/home/password123456/catkin_ws/src/fastlio_to_mavros，FAST-LIO2在/home/password123456/fast_lio2_ws/src/FAST_LIO，Livox驱动在/home/password123456/livox_ws/src/livox_ros_driver2，工具脚本在/home/password123456/catkin_ws/tools。南邮参考代码位于/home/password123456/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard。先读参考仓库，再到catkin_ws编写；不要在~/slam-drone的南邮历史目录中修改或新增我们的飞行代码。开始前运行pwd、ls、rospack find并报告实际路径；若路径不一致，先停止修改并说明差异。
+
+【必须先阅读，完成后才能写代码】
+第一步进入/home/password123456/slam-drone/2025电赛G南邮飞机上位机代码/drone_ws-main/src/offboard，逐个阅读README.md、src/odom_to_pose_node.cpp、src/base_controller.cpp、src/task_controller.cpp和config/offb_configs.yaml。先输出一份简洁审阅摘要，明确南邮如何进入OFFBOARD、如何持续发送setpoint、起飞最终发送什么坐标、订阅哪个高度判断到达、如何进入后续任务和如何降落。没有完成这份源码摘要前，不得创建px4_basic_control。
+
+第二步读取当前NX真实的fastlio_to_mavros源码、launch、FAST-LIO launch和实际加载的YAML；读取~/catkin_ws/tools/start_uav_stack.sh但不要盲目执行。确认FAST-LIO运行时订阅的IMU是/mavros/imu/data_raw，而不是/livox/imu。用rosparam和rostopic info确认/laserMapping确实订阅/mavros/imu/data_raw。若当前仍使用雷达内置IMU，先只报告配置差异，不允许直接进入自动起飞。
+
+参考南京邮电大学2025 offboard代码的核心逻辑：持续发布/mavros/setpoint_position/local，使用/mavros/local_position/pose.z判断是否到达高度。南邮固定发送[0,0,1.1,0]，我们不能复制固定零点；必须在人工触发时锁存x0、y0、z0、yaw0，并发送[x0,y0,z0+takeoff_height,yaw0]。参考南邮的OFFBOARD预发送、位置起飞和状态机，不复制其固定原点、不完整坐标对齐、速度触地下降和接近地面主动上锁逻辑。
+
+【坐标系核心结论】
+先审计SLAM map与MAVROS local是否数值对齐，不能因为飞机在H点摆正就直接假设可以把SLAM坐标发送给飞控。MAVROS只负责标准ENU/NED转换，不知道H点和地图长边。第一阶段起飞目标使用锁存后的[x0,y0,z0+takeoff_height,yaw0]。为后续沿任务+X前进0.5m预留统一转换：目标应为[x0+0.5*cos(yaw0),y0+0.5*sin(yaw0),z0+1.0,yaw0]；只有拆桨实测确认yaw0约为0且SLAM +X与MAVROS local +X直接对齐时，才可简化为[x0+0.5,y0,z0+1.0,yaw0]。本阶段不要实际执行水平飞行。
+
+【当前实测基线】
+用户已取得一组SLAM与PX4 local数据：位置差模长约0.77mm；SLAM yaw约-49.669°，PX4 local yaw约-49.674°；两组四元数点积约-0.999992，考虑q与-q等价后姿态总差约0.46°。这说明当前ROS侧SLAM与PX4 local已经高度数值对齐。实现时把这组结果作为基线，但不得用单帧结果跳过动态验证。四元数比较必须归一化并使用abs(dot)，禁止因为q与-q分量符号相反而报告姿态错误。脚本启动授权前应在短时间窗口比较SLAM、vision和local的相对位置变化、时间戳和姿态角差；默认建议位置差阈值先设为0.05m、姿态差阈值5°，做成YAML参数，实际阈值经拆桨数据调整。
+
+【SLAM高度数据链】
+确认链路为：/mavros/imu/data_raw -> FAST-LIO2 -> /Odometry -> fastlio_to_mavros -> /mavros/vision_pose/pose -> PX4 EKF2 External Vision融合 -> /mavros/local_position/pose。主控制反馈和到达判断必须使用/mavros/local_position/pose，因为PX4位置控制器使用EKF2 local position；同时监视/Odometry和/mavros/vision_pose/pose作为SLAM与桥接健康检查。不要直接使用原始/Odometry.z替代PX4 local z做到达判断，也不要根据SLAM z自行计算油门。
+
+在写飞行代码前，先给出并执行只读检查：rostopic info/hz/echo检查/mavros/imu/data_raw、/Odometry、/mavros/vision_pose/pose、/mavros/local_position/pose和/mavros/state。拆桨抬高整机约0.30m，确认Δz_slam、Δz_vision、Δz_local都向上增加且尺度一致；同时要求在QGC Estimator状态或PX4日志中确认External Vision高度正在融合。若任一链路不成立，输出阻塞原因，不允许继续真机自动起飞。
+
+【功能包和接口】
+创建最小ROS1包px4_basic_control，至少包含package.xml、CMakeLists.txt、README.md、config/one_key_takeoff_hover_land.yaml、launch/one_key_takeoff_hover_land.launch、scripts/one_key_takeoff_hover_land.py和最小测试。Python使用rospy，主类命名OneKeyTakeoffHoverLandNode。节点启动后只监视，绝不能自动起飞。提供std_srvs/Trigger服务/uav/run_one_key_takeoff_hover_land，只有人工调用才运行，任务执行期间拒绝重复触发。
+
+订阅/mavros/state、/mavros/extended_state、/mavros/local_position/pose、/Odometry、/mavros/vision_pose/pose；发布/mavros/setpoint_position/local，并发布可读的任务状态和active_target；调用/mavros/set_mode和/mavros/cmd/arming。检查FCU connected、当前POSCTL、未解锁、在地面、三路位姿新鲜且有限、z相对变化一致、无明显跳变、无px4ctrl和其他setpoint发布器、遥控器可以接管。条件不满足时拒绝任务并返回明确原因。
+
+【起飞状态机】
+实现IDLE -> VALIDATE -> CAPTURE_START -> PRESTREAM_HOLD -> REQUEST_OFFBOARD -> REQUEST_ARM -> WAIT_READY -> TAKEOFF -> WAIT_STABLE -> HOVER_5S -> REQUEST_AUTO_LAND -> MONITOR_LANDING -> COMPLETE；异常进入ABORT或PILOT_TAKEOVER。具体OFFBOARD和ARM请求顺序必须做成清晰状态，并先在PX4 SITL和拆桨条件下验证PX4 1.13.3实际接受的顺序。
+
+触发时锁存x0、y0、z0、yaw0，禁止假设PX4 local原点是零。使用独立rospy.Timer默认20Hz持续发布active_target，状态机等待服务时也不能断流。先发送[x0,y0,z0,yaw0]至少2秒；只有确认armed=true且mode=OFFBOARD后，才把z setpoint以默认0.25m/s从z0平滑推进到z0+takeoff_height，x/y/yaw保持不变。dry_run默认true；首次真机takeoff_height必须为0.5m，通过后才允许改为1.0m。
+
+到达条件为水平误差<=0.15m、高度误差<=0.10m，并连续稳定1秒。到达后继续20Hz发布[x0,y0,z0+takeoff_height,yaw0]，稳定悬停累计5秒；超出误差阈值时暂停悬停计时。悬停完成后请求AUTO.LAND；AUTO.LAND确认前继续发送最后悬停目标，确认后不再请求OFFBOARD、不抢飞手模式，只监视下降、落地和PX4自动上锁。
+
+【安全限制】
+禁止使用px4ctrl；禁止发布/mavros/setpoint_raw/attitude、AttitudeTarget.thrust、原始油门、PWM或电机命令；禁止调用ArduPilot GUIDED takeoff语义；禁止空中强制disarm；飞手主动切出OFFBOARD后立即停止任务且绝不自动抢回；SLAM、vision或local pose超时/跳变时停止任务推进并按当前模式和飞手接管策略处理；节点重启必须回IDLE，不能恢复旧任务。
+
+【测试顺序和交付】
+依次完成：静态代码检查 -> dry_run -> 模拟消息测试 -> PX4 SITL -> 拆桨服务/模式测试 -> 系留或保护架0.5m -> 飞手接管测试 -> 1.0m。每次记录/mavros/state、/mavros/extended_state、/mavros/local_position/pose、/mavros/setpoint_position/local、/mavros/vision_pose/pose、/Odometry、任务状态，并保存PX4 .ulg。最终交付修改文件清单、完整README、启动和Trigger命令、YAML参数说明、状态机说明、测试结果、拆桨/系留检查表及仍未解决的风险。没有完成SLAM高度融合、遥控接管和拆桨验证时，不得声称可以带桨自由飞行。
 ```
 
-关键规则：
+---
 
-- setpoint 由独立定时器持续发送，状态机阻塞不能导致断流；
-- OFFBOARD 前预发送当前位置 HOLD 至少 2 s；
-- 只有 `armed=true` 且 `mode=OFFBOARD` 后才推进高度目标；
-- 高度到达条件为误差阈值连续满足，而不是单帧满足；
-- 飞手切出 OFFBOARD 后立即停止任务推进，绝不重新请求 OFFBOARD；
-- 空中禁止强制 disarm；
-- AUTO.LAND 未确认前继续发送最后悬停目标；
-- AUTO.LAND 确认后停止抢模式，只监视；
-- 节点重启回到 IDLE，不恢复旧任务。
+## 11. 后续阶段只保留名称，本次不执行
 
-## 10. 分阶段开发路线
+1. 坐标方向审计：前、左、上、左转和回 H 点；
+2. 沿任务 `+X` 方向移动 `0.30 m`；
+3. 通用 `coordinate_manager`；
+4. 单轴、正方形和返航；
+5. 比赛航点；
+6. 视觉、抛投和空地协同。
 
-### 阶段 0：工作空间和现状审计
+阶段一没有完整通过前，不生成这些阶段的飞行代码。
 
-目标：找到 NX 实际 catkin 工作空间、桥接包、MAVROS launch、PX4 参数和所有 setpoint 发布器。
+---
 
-验收：输出话题、服务、frame、频率、时间戳、参数快照和冲突节点列表，不改飞行代码。
-
-### 阶段 1：SLAM/桥接/PX4 坐标审计
-
-目标：拆桨验证前、左、上、左转和回原点。
-
-动作：
+## 12. 最短操作记忆版
 
 ```text
-前移0.5m：mission X应增加
-左移0.5m：mission Y应增加
-抬高0.3m：mission Z应增加
-左转30°：mission yaw应增加
-返回H点：相对位置应回到零附近
+飞机放H点并摆正机头
+→ 启动MAVROS
+→ 确认/mavros/imu/data_raw
+→ 启动使用飞控IMU的FAST-LIO2
+→ echo检查/Odometry
+→ 启动bridge
+→ echo检查vision_pose和local_position
+→ 拆桨抬高0.30m确认三路Z一致
+→ 手动POSCTL定点
+→ 启动一键起降节点
+→ 人工Trigger
+→ 0.5m起飞
+→ 悬停5秒
+→ AUTO.LAND
 ```
 
-同时记录 `/Odometry`、`/mavros/vision_pose/pose`、`/mavros/local_position/pose` 和 rosbag。
-
-### 阶段 2：统一任务坐标和 coordinate_manager
-
-目标：实现 H 原点、初始机头 +X、左侧 +Y、向上 +Z，以及任务坐标与 MAVROS local 双向转换。
-
-先完成 yaw 为 `0°、±90°、180°` 的单元测试。
-
-### 阶段 3：SLAM Z 自动起飞/悬停/降落
-
-目标：完成 `0.5 m -> 1.0 m` 分级验证，不加入水平移动。
-
-验收：起飞过程中 x/y/yaw 保持，z 与 SLAM 高度增量一致，悬停 5 s 后切 AUTO.LAND，飞手可随时接管。
-
-### 阶段 4：沿任务 +X 小步移动
-
-前提：阶段 3 完整通过。
-
-测试顺序：
+核心起飞目标：
 
 ```text
-起飞到0.5m
--> 沿 mission +X 移动0.30m
--> HOLD 3s
--> 返回 mission X=0
--> HOLD 3s
--> AUTO.LAND
+[x0, y0, z0 + takeoff_height, yaw0]
 ```
 
-禁止首次水平测试直接飞 1 m。
-
-### 阶段 5：单轴、正方形、返航
-
-依次验证：
-
-- `+X/-X`；
-- `+Y/-Y`；
-- 固定高度正方形；
-- 返回 H 点上方；
-- 再请求降落。
-
-### 阶段 6：比赛航点和任务状态机
-
-加入航点 YAML、到点判定、返回 H、视觉接管前安全悬停。
-
-### 阶段 7：视觉伴飞、抛投和空地协同
-
-只有基础位置控制长期稳定后再接入，任一时刻只能有一个 setpoint 控制源。
-
-## 11. 分步开发提示词
-
-### 提示词 0：只做现场审计，不写飞行代码
+核心判断高度：
 
 ```text
-审计 Orin NX 的 ROS1 Noetic 工作空间，找到 FAST-LIO2、fastlio_to_mavros、MAVROS/PX4 launch 和所有发布 /mavros/setpoint_* 的节点。记录 /Odometry、/mavros/vision_pose/pose、/mavros/local_position/pose、/mavros/state 的消息类型、frame_id、child_frame_id、频率、时间戳年龄和静止漂移；导出 PX4 1.13.3 EKF2 外部视觉、高度源、OFFBOARD failsafe、降落和悬停推力相关参数。确认 px4ctrl 未运行。只输出审计报告，不解锁、不切 OFFBOARD、不修改参数。
+/mavros/local_position/pose.z
 ```
 
-### 提示词 1：坐标与 SLAM Z 审计工具
+SLAM健康对照：
 
 ```text
-在 ROS1 中实现只读 coordinate_audit.py，绝不解锁、切模式或发送 setpoint。同步监视 /Odometry、/mavros/vision_pose/pose、/mavros/local_position/pose，打印各自 xyz、四元数、yaw、相对初始增量、时间戳年龄和频率；支持人工标记前移0.5m、左移0.5m、抬高0.3m、左转30°、回到H。判断三路数据的轴方向、比例、固定旋转/平移差、z正负号和延迟；检测NaN、时间戳倒退、低频、跳变。输出CSV和rosbag命令，明确SLAM高度是否真正进入PX4 EKF2。
+/Odometry.z
+/mavros/vision_pose/pose.z
 ```
-
-### 提示词 2：审查并修正桥接的完整刚体变换
-
-```text
-读取当前 fastlio_to_mavros 源码和FAST-LIO frame/extrinsic配置。确认 /Odometry 表示LiDAR、IMU还是body位姿；禁止只旋转位置而原样复制四元数，禁止只减初始z。建立 T_L_S = T_L_B0 * inverse(T_S_B0)，使用同一个SE(3)变换处理位置和姿态；避免与MAVROS标准ENU/NED转换重复；处理时间戳、四元数归一化、初始化稳定窗口、重启和跳变。先写离线/单元测试，不直接真机飞行。
-```
-
-### 提示词 3：任务原点和 coordinate_manager
-
-```text
-实现独立coordinate_manager。mission原点为H点初始化时机体控制参考点，+X为初始机头/地图长边朝场内，+Y为初始左侧，+Z向上，左转yaw为正。稳定后锁存p_L0/yaw_L0；实现 mission<->MAVROS local 双向转换和yaw wrap。沿mission +X距离d的local目标必须为[x0+d*cos(yaw0), y0+d*sin(yaw0), z0+h, yaw0]。其他模块不得再次交换ENU/NED。对yaw0=0、±90°、180°、平移、z偏移和往返转换做单测。
-```
-
-### 提示词 4：独立 setpoint_streamer
-
-```text
-实现setpoint_streamer，以独立rospy.Timer默认20Hz持续发布active_target到/mavros/setpoint_position/local。active_target未授权时只允许安全HOLD，不允许默认零点；检测实际发布频率和时间戳；上层状态机阻塞时仍不断流；支持更新目标但限幅单周期位置跳变。不要切模式、解锁、判断到点或自写PID。
-```
-
-### 提示词 5：状态和安全监视
-
-```text
-实现vehicle_state_monitor、slam_health_monitor和safety_guard。检查FCU connected、模式、armed、落地状态、/Odometry、vision_pose、local_pose的新鲜度、有限值、四元数、频率、静止漂移和窗口跳变；检查三路z相对增量一致；输出ready_for_offboard和明确故障码。飞手切出OFFBOARD后锁存PILOT_TAKEOVER，禁止自动抢回。
-```
-
-### 提示词 6：首个 Python 一键起降脚本
-
-```text
-在ROS1 Noetic中创建px4_basic_control最小包和scripts/one_key_takeoff_hover_land.py。节点启动只监视，提供/uav/run_one_key_takeoff_hover_land std_srvs/Trigger人工触发，运行中拒绝重复触发。开始前要求FCU连接、当前POSCTL、未解锁、在地面、SLAM/vision/local三路位姿连续有效、外部视觉高度正在PX4 EKF2中融合、坐标审计通过、无其他setpoint发布器。锁存x0/y0/z0/yaw0；独立20Hz定时器先预发送当前HOLD至少2秒，再按经SITL验证的顺序请求ARM和OFFBOARD。确认armed且OFFBOARD后，以默认0.25m/s把z目标从z0平滑推进到z0+takeoff_height，x/y/yaw保持起点。默认开发参数dry_run=true，首次真机takeoff_height=0.5m，通过后才设1.0m。高度误差<=0.10m且xy<=0.15m连续1秒后开始累计悬停5秒，超出阈值暂停计时。之后请求AUTO.LAND；确认前继续最后HOLD，确认后不抢OFFBOARD，只监视降落和PX4自动上锁。禁止AttitudeTarget.thrust、原始油门、px4ctrl、固定[0,0,1]、空中强制disarm和飞手接管后自动恢复任务。加入超时、服务拒绝、位姿失效、setpoint低频和中文状态日志。
-```
-
-### 提示词 7：沿 mission +X 的 0.3 m 测试
-
-```text
-在一键起降通过后增加独立小步测试，不修改坐标定义。起飞到0.5m稳定后，任务层给出[d,0,0.5,0]，d默认0.30m；由coordinate_manager转换为MAVROS local，连续发送并限速，保持yaw0。稳定HOLD 3秒后返回[0,0,0.5,0]，再HOLD 3秒并AUTO.LAND。记录期望mission、转换后local setpoint、SLAM原始位姿和PX4 local反馈。若飞机不是沿初始机头/地图长边移动，立即停止继续放大距离，先修正坐标变换。
-```
-
-### 提示词 8：目标平滑和到点判定
-
-```text
-实现target_manager和arrival_checker。任务目标经coordinate_manager转换后，按max_xy_speed、max_z_speed、max_yaw_rate逐周期平滑推进；分别计算xy、z、yaw误差，连续满足arrival_hold_time才报告到达，使用滞回。位姿超时、模式错误或定位跳变时不得报告到达。第一版不自写速度PID。
-```
-
-### 提示词 9：故障注入和仿真
-
-```text
-建立单元测试、ROS模拟和PX4 SITL测试。注入SLAM停止、bridge停止、vision_pose超时、local_pose超时、z反号、位置跳变、时间戳倒退、OFFBOARD切出、FCU断开、服务拒绝、上层线程阻塞、节点重启。验证setpoint timer仍20Hz、飞手接管不抢回、节点重启不恢复旧任务、定位失效不继续推进。生成测试报告和rosbag/PX4日志清单。
-```
-
-### 提示词 10：真机前安全审查
-
-```text
-只做审查，不增加功能。检查螺旋桨拆除测试、遥控器模式开关和急停、OFFBOARD丢失动作、定位丢失动作、AUTO.LAND高度源、MPC_THR_HOVER/MPC_USE_HTE/MPC_THR_MIN/MAX/MPC_Z_VEL_MAX_UP/MPC_LAND_SPEED、未捕获原点发零点、重复ENU/NED、LiDAR/body杆臂、vision yaw冲突、NaN、旧目标恢复、多个setpoint发布器。输出阻塞项、修复顺序、0.5m系留测试和1.0m放飞条件。
-```
-
-## 12. 测试与验收顺序
-
-```text
-A. 静态代码与参数审计
-B. 坐标只读审计
-C. 拆桨抬高0.3m验证SLAM Z融合
-D. coordinate_manager单元测试
-E. dry_run状态机
-F. PX4 SITL完整起降
-G. 拆桨检查ARM/OFFBOARD/AUTO.LAND服务行为
-H. 系留/保护架0.5m起飞悬停降落
-I. 飞手主动切模式，确认程序不抢回
-J. 1.0m起飞悬停降落
-K. 0.5m高度沿mission +X移动0.3m并返回
-L. 单轴和正方形
-M. 比赛航点与后续任务
-```
-
-## 13. 必须保存的数据
-
-每次测试至少录制：
-
-```text
-/mavros/state
-/mavros/extended_state
-/mavros/local_position/pose
-/mavros/setpoint_position/local
-/mavros/vision_pose/pose
-/Odometry
-/uav/basic_control/state
-/uav/basic_control/active_target
-/uav/basic_control/health
-```
-
-同时保存：
-
-- PX4 `.ulg`；
-- 本次 QGC 参数快照；
-- 飞机摆放方向照片；
-- FAST-LIO、桥接和控制节点启动时间；
-- 测试高度、距离、阈值和结果。
-
-## 14. 第一阶段成功标准
-
-- [ ] SLAM 初始化时飞机位于 H 点且机头沿地图长边朝场内；
-- [ ] 明确 `/Odometry` 的参考点是 LiDAR、IMU还是body；
-- [ ] SLAM、vision_pose、PX4 local 的 z 都向上为正且增量一致；
-- [ ] QGC/PX4日志确认外部视觉高度实际参与融合；
-- [ ] 脚本启动不会自动起飞；
-- [ ] 只从健康的 POSCTL 状态接受人工触发；
-- [ ] 起点使用锁存的 `x0/y0/z0/yaw0`，不假设零点；
-- [ ] OFFBOARD 前持续发送当前位置 HOLD；
-- [ ] OFFBOARD 期间 setpoint 稳定达到配置频率；
-- [ ] 不自行计算油门，不发送姿态推力；
-- [ ] 在 SLAM Z 约束下平滑上升到相对高度；
-- [ ] 稳定后悬停 5 s；
-- [ ] 切换 AUTO.LAND 后不抢回 OFFBOARD；
-- [ ] 飞手切模式可立即接管；
-- [ ] 0.5 m 测试通过后才允许 1.0 m；
-- [ ] 沿任务 +X 的 0.3 m 运动与初始机头/地图长边一致；
-- [ ] 返回 `[0,0,h,0]` 后回到 H 点上方；
-- [ ] 每次测试保存 rosbag、参数和 PX4 日志。
-
-## 15. 最关键的工程结论
-
-> **SLAM 初始化为 `(0,0,0)`，并不保证 `/mavros/local_position/pose` 也从零开始。** 控制脚本必须锁存 MAVROS local 的 `p_L0/yaw_L0`。
-
-> **“使用 SLAM Z 起飞”应理解为 SLAM 外部视觉高度进入 PX4 EKF2，再由 PX4 原生位置控制器闭环。** 不要让 Python 绕过 PX4 直接用原始 `/Odometry.z` 算油门。
-
-> **沿比赛地图 +X 移动时，任务层发送 `[d,0,h,0]`；真正发布到 MAVROS 的 local 坐标通常是 `[x0+d cos(yaw0), y0+d sin(yaw0), z0+h, yaw0]`。** 只有完成软件坐标对齐并验证 `yaw0≈0` 后，才可简化为 `x0+d`。
-
-> **飞机摆放方向只提供物理基准，不替代软件验证。** 首次必须拆桨执行“前、左、上、左转、回原点”审计。
-
-> **先保证一号机最小闭环。** 自动起降和 0.3 m 单轴移动没有完整通过以前，不加入完整航点、视觉、抛投和空地协同控制。
