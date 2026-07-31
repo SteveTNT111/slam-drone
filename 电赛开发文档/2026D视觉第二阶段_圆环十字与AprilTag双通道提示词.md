@@ -1,103 +1,391 @@
 ﻿---
 created: 2026-07-31
 updated: 2026-07-31
-status: 可直接交给机载 Codex 的第二阶段架构提示词
+status: 可直接交给机载 Codex
 stage: AprilTag + 同心圆十字双通道平台识别
 platform: ROS1 Noetic + Python3 + OpenCV + D435i + Orin NX
 ros_package: d2026_vision
 work_target: /home/password123456/catkin_ws/src/d2026_vision
+reference_script: CUADC的识别脚本（参考用）/detector_node.py
 related:
   - 2026D视觉第一阶段_AprilTag识别脚本提示词.md
   - 视觉识别模块说明.md
 ---
 
-# 2026 D vision：圆环十字与 AprilTag 双通道代码架构提示词
+# 2026 D vision：圆环十字与 AprilTag 双通道提示词
 
-> 本文档用于在已经完成单 AprilTag 识别的 `d2026_vision` 包中，增加传统 OpenCV 几何靶标识别，并建立 AprilTag 与同心圆十字的双通道融合架构。
->
-> 当前只开发视觉感知、调试、质量评分和 ROS 输出，不直接发布 MAVROS setpoint，不修改起飞、航点、伴飞或降落控制器。
+> 文档顺序：**第 0 节是可以直接复制给机载 Codex 的完整提示词，并先说明最终运行效果；第 1 节以后是代码功能细则、安全边界和验收标准。**
 
-## 1. 识别目标
+## 0. 可直接复制给机载 Codex 的完整提示词
 
-小车平台中心图案：
+```text
+你现在工作在 Orin NX 的 ROS1 Noetic 工作空间：
+/home/password123456/catkin_ws
 
-- 外圆直径：`0.50 m`；
-- 内圆直径：`0.30 m`；
-- 圆环和十字线宽：`0.02 m ± 0.002 m`；
-- 两圆同心；
-- 十字穿过共同圆心；
-- 圆环和十字均为黑色，背景尽量为白色。
+现有视觉包：
+/home/password123456/catkin_ws/src/d2026_vision
 
-系统还可能看到 `tag36h11`：
+飞机已经实现室内定点飞行和航点飞行。d2026_vision 中已经或正在实现单 AprilTag 识别节点 apriltag_pose_viewer.py。本任务不是重写现有节点，而是在同一个包中新增“AprilTag + 30/50cm同心圆 + 十字”的双通道平台识别功能。
 
-- ID 9：当前打印黑色外框边长 15 cm，正式尺寸以后按实际贴法更新；
-- ID 10～15：4 cm；
-- ID 16～19：8 cm；
-- 每个 Tag 相对平台圆心的位置必须从 YAML 加载，禁止写死在算法中。
+开始前必须检查：
+1. pwd、git status、ROS_DISTRO、Python和OpenCV版本；
+2. d2026_vision现有文件、launch、参数和话题；
+3. D435i RGB与CameraInfo的真实话题、分辨率、频率、编码和frame_id；
+4. 现有apriltag_pose_viewer.py是否能单独运行；
+5. 不得覆盖、删除或破坏已经工作的AprilTag代码。
 
-## 2. 双通道设计原则
+仓库会同时推送CUADC参考脚本。必须先定位并阅读：
 
-### 通道 A：AprilTag
+相对仓库根目录：
+CUADC的识别脚本（参考用）/detector_node.py
 
-负责：
+推荐定位命令：
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REF_SCRIPT="$REPO_ROOT/CUADC的识别脚本（参考用）/detector_node.py"
+test -f "$REF_SCRIPT" && echo "$REF_SCRIPT"
 
-- 识别 ID；
-- 按 ID 查实测黑色外框边长；
-- 单 Tag 相机系位姿；
-- 根据实测 `tag -> platform` 外参推算平台圆心；
-- 提供非对称方向信息和平台朝向。
+本任务尽量原样复用该脚本中与显示和坐标有关的代码，不要凭记忆重写。重点参考：
+- quaternion_rotate_vector（约83-94行）；
+- transform_camera_to_body（约711-728行）；
+- _update_best_target_geo中的相机→机体→ENU/local部分（约766-827行）；
+- image_callback中的绘制顺序（约868-970行）；
+- project_pixel和pixel_to_m（约1152-1185行）；
+- draw_overlay（约1191-1253行）；
+- draw_center_axes（约1255-1277行，要求尽量原样复用）；
+- draw_delta_label、draw_text_bg（约1279-1349行）；
+- _build_bottom_bar的状态组织方式（约1418-1598行，只参考结构）；
+- _truncate_text_to_width、颜色常量和draw_bottom_bar（约1601-1696行）。
 
-### 通道 B：圆环 + 十字
+明确禁止带入：YOLO模型、圆桶/BUCKET变量与消息、MissionStatus、抛投任务状态、GPS/WGS84、GeoTarget、桶NED、自动启动roscore/MAVROS、CUADC自定义消息。所有bucket命名必须改为platform或target。
 
-负责：
+====================
+最终我要得到的代码运行效果
+====================
 
-- 不依赖 Tag ID，直接识别题目规定图案；
-- 通过两组同心椭圆估计平台中心；
-- 通过十字交点校验或修正圆心；
-- 通过外圆/内圆表观尺寸提供尺度质量信息；
-- Tag 被遮挡或像素不足时继续输出平台中心。
+完成后运行：
 
-### 融合层
+roslaunch d2026_vision platform_target_dual.launch show_window:=true
 
-负责：
+程序弹出窗口：
 
-- 对两个通道的中心、时间戳和置信度进行融合；
-- 两通道一致时提高置信度；
-- 只剩一个通道时降级输出；
-- 两通道明显冲突时拒绝盲目平均；
-- 输出统一的平台中心、来源和状态。
+2026 D vision - Dual Target Detector
 
-### 必须理解的限制
+主识别窗口必须尽量保持CUADC detector_node.py的原有显示风格，而不是默认显示四宫格：
+1. 使用原始彩色相机画面作为主背景；
+2. 画面中心固定坐标轴直接复用CUADC draw_center_axes，x红色向右、y绿色向下、中心白点；
+3. 识别到黑色双环后，在主画面绘制外椭圆、内椭圆、平台中心红点/短十字和误差连线；
+4. 平台中心附近使用CUADC draw_overlay、draw_text_bg、draw_delta_label风格显示source、confidence、camera xyz、distance和u/v误差；
+5. 画面底部固定使用CUADC draw_bottom_bar风格的半透明双栏：左栏显示识别状态，右栏显示TARGET CAMERA、TARGET BODY FRD、FC LOCAL ENU、TARGET LOCAL ENU；
+6. 自适应字号、超宽文本截断、顶部分割线、中间竖线、颜色习惯尽量原样复用CUADC代码；
+7. 不出现BUCKET、MISSION、AMMO、DROP、GPS或WGS84字段；
+8. show_debug_views=true时才额外显示或发布灰度、Canny、候选椭圆等调试图；高级增色、对比度增强、CLAHE和自适应二值化暂不实现。
 
-规定图案是同心圆加对称十字，本身存在 90°/180°方向歧义。几何通道可以稳定给出中心，但**不能单独保证唯一的小车车头方向**。小车航向优先来自 AprilTag 的非对称布局、小车通信状态或其他方向标记。
+主画面颜色沿用CUADC：目标/靶标黄色，机体系天蓝，飞控/local绿色，警告红色；固定坐标轴始终为x红、y绿。融合中心可以用绿色，圆环候选可以用蓝色，但不得改变固定坐标轴。
+
+画面实时显示：
+- state：FUSED / GEOMETRY_ONLY / TAG_ONLY / CONFLICT / LOST / INVALID；
+- 最终平台中心像素坐标；
+- 相对图像中心的error_u和error_v；
+- final、ring、cross、tag四类置信度；
+- AprilTag ID和对应实测黑色外框边长；
+- 两通道中心差值；
+- FPS；
+- 当前是全图搜索还是ROI跟踪。
+
+终端限频输出示例：
+
+[FUSED] center=(642.3,358.1) error=(+2.3,-1.9)px conf=0.91 ring=0.88 cross=0.84 tag=0.79 disagreement=6.2px fps=21.4
+
+8cm Tag在1.5m识别失败，但圆环十字正常时：
+
+[GEOMETRY_ONLY] center=(638.5,361.2) error=(-1.5,+1.2)px conf=0.82 yaw=AMBIGUOUS fps=20.7
+
+圆环被遮挡，但完成布局标定的AprilTag有效时：
+
+[TAG_ONLY] tag_ids=[9] center=(645.1,355.7) error=(+5.1,-4.3)px conf=0.76 fps=22.0
+
+两个通道明显不一致时：
+
+[CONFLICT] geometry=(640.0,360.0) tag=(706.0,332.0) disagreement=71.7px visible=false
+
+目标丢失时：
+
+[LOST] visible=false age=0.53s
+
+没有目标时不得每帧疯狂刷屏，打印频率必须参数化。
+
+程序同时发布：
+
+/d2026_vision/platform_visible std_msgs/Bool
+/d2026_vision/platform_center_px geometry_msgs/Vector3Stamped
+/d2026_vision/platform_pose_camera geometry_msgs/PoseWithCovarianceStamped
+/d2026_vision/detection_source std_msgs/String
+/d2026_vision/ring_center_px geometry_msgs/PointStamped
+/d2026_vision/cross_center_px geometry_msgs/PointStamped
+/d2026_vision/tag_center_px geometry_msgs/PointStamped
+/d2026_vision/debug_image sensor_msgs/Image
+/d2026_vision/geometry_debug_image sensor_msgs/Image
+
+platform_center_px定义：
+- x = 平台中心u - 图像cx；
+- y = 平台中心v - 图像cy；
+- z = 最终置信度。
+
+所有消息继承输入图像时间戳。没有有效米制位姿时，不得发布伪造的零位姿。
+
+坐标转换与CUADC保持一致：
+- camera optical：X向图像右，Y向图像下，Z沿镜头向前；
+- body采用CUADC的FRD显示约定：X前、Y右、Z下；
+- 下视相机旋转映射沿用X_body=-Y_cam、Y_body=X_cam、Z_body=Z_cam，再加可配置安装平移；
+- camera_mount_x_forward、camera_mount_y_right、camera_mount_z_down全部参数化；
+- 使用/mavros/local_position/pose的姿态四元数和CUADC quaternion_rotate_vector得到ENU偏移；
+- target_local_enu = aircraft_local_enu + target_offset_enu；
+- 如显示NED，只做明确换算N=ENU.y、E=ENU.x、D=-ENU.z，不涉及GPS/WGS84。
+
+双通道必须能独立降级：
+1. Tag和几何都有效且一致：FUSED；
+2. Tag失败、圆环十字有效：GEOMETRY_ONLY；
+3. 圆环十字失败、完成布局标定的Tag有效：TAG_ONLY；
+4. 两个中心冲突：CONFLICT，不得直接平均；
+5. 两路都失败：LOST。
+
+传统CV几何通道必须：
+1. 识别直径50cm外圆和30cm内圆；
+2. 允许透视下圆变成椭圆，主方法使用边缘/轮廓+fitEllipse，不能只用HoughCircles；
+3. 使用同心度、内外直径比0.60、轴比、主轴角、拟合误差和时间连续性评分；
+4. 在圆心附近ROI使用HoughLinesP和线段角度聚类寻找两组近似垂直主线；
+5. 求十字交点并与圆心校验；
+6. 圆环和十字一致时输出稳定几何中心；
+7. 几何图案有90°/180°方向歧义，GEOMETRY_ONLY时yaw必须写AMBIGUOUS，不能假装得到唯一车头方向。
+
+AprilTag通道必须：
+1. 复用现有tag36h11检测；
+2. 每个ID使用自己的实测黑色外框边长；
+3. 从tag_layout.yaml读取Tag相对平台中心的位置和朝向；
+4. 只有enabled=true且完成实测的Tag才允许推算平台中心；
+5. 使用完整刚体变换，不能只减固定像素；
+6. 未测布局的Tag只能显示单Tag位姿，不能伪造平台中心。
+
+关于增色、增强对比度、CLAHE、自适应二值化和二值调试画面：本次只把接口、参数名和TODO写进配置与代码架构，默认全部关闭，暂时不要实现实际增强算法。当前版本只允许实现识别所必需的基础灰度、轻度模糊和Canny/基础阈值。后续取得真实D435i图像后，再决定是否启用增强处理。
+
+代码必须模块化，至少包含：
+
+src/d2026_vision/apriltag_backend.py
+src/d2026_vision/geometry_backend.py
+src/d2026_vision/target_fusion.py
+src/d2026_vision/pose_utils.py
+src/d2026_vision/coordinate_transform.py
+src/d2026_vision/cuadc_display.py
+src/d2026_vision/temporal_filter.py
+scripts/platform_target_dual_node.py
+config/target_geometry.yaml
+config/tag_layout.yaml
+config/fusion.yaml
+launch/platform_target_dual.launch
+launch/platform_target_dual_debug.launch
+
+算法类必须与rospy回调解耦，支持单张图片、视频和rosbag离线测试。
+
+按以下顺序开发：
+G0：离线单图/视频框架；
+G1：双椭圆圆心；
+G2：十字交点校验；
+G3：Tag布局到平台中心；
+G4：复用CUADC相机系→机体系→local系变换，并完成双通道融合、状态机和ROS输出；
+G5：D435i实时测试。
+
+不得一次写完再测试。每完成一步都给出真实debug图、参数和测试结果。没有相机或实物时必须明确写“未实机验证”，不能虚构成功。
+
+严格安全边界：
+- 不发布任何/mavros/setpoint_*；
+- 不解锁、不切换模式、不调用起飞或降落；
+- 不修改PX4、MAVROS、FAST-LIO2参数；
+- 不修改已经验证的自动起飞、定点和航点代码；
+- 不把单帧识别成功当作允许降落；
+- 视觉节点退出不得影响飞控。
+
+完成后交付：
+1. 新增和修改文件清单；
+2. 每个模块职责；
+3. 实际启动命令；
+4. ROS话题和参数表；
+5. Python语法检查、单元测试和catkin构建的真实结果；
+6. 单图、视频、rosbag、实时相机分别测试了哪些；
+7. FUSED、GEOMETRY_ONLY、TAG_ONLY、CONFLICT、LOST五种状态验证情况；
+8. 实测FPS、识别率、中心抖动和已知问题；
+9. git status和git diff摘要；
+10. 明确确认没有修改飞控控制链路。
+
+继续阅读本文后面的全部功能细则，并以这些细则作为实现约束。
+```
 
 ---
 
-## 3. 不要破坏第一阶段节点
+# 以下为代码功能细则与约束
 
-保留并继续支持：
+## 1. 识别对象和能力边界
+
+规定靶标：
+
+- 外圆直径 `0.50 m`；
+- 内圆直径 `0.30 m`；
+- 圆环和十字线宽 `0.02 m ± 0.002 m`；
+- 两圆同心，十字穿过圆心；
+- 黑色图案、白色背景。
+
+双通道职责：
+
+| 通道 | 主要作用 | 不能独立保证的内容 |
+|---|---|---|
+| AprilTag | ID、单Tag位姿、布局换算后的平台中心、非对称方向 | Tag太小、模糊或遮挡时可能丢失 |
+| 圆环十字 | 直接寻找规定图案的几何中心 | 对称图案不能提供唯一车头方向 |
+| 融合层 | 降级、冲突检查、统一输出 | 不直接控制飞机 |
+
+视觉节点只负责感知，不发布飞控命令。
+
+## 2. CUADC参考脚本复用边界
+
+### 2.1 参考位置
+
+仓库根目录相对路径：
+
+```text
+CUADC的识别脚本（参考用）/detector_node.py
+```
+
+机载Codex必须通过仓库根目录定位，不要假定当前工作目录：
+
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REF_SCRIPT="$REPO_ROOT/CUADC的识别脚本（参考用）/detector_node.py"
+```
+
+该参考脚本会与本项目一起推送到仓库。实现前必须读实际文件，不允许只看本文摘要。
+
+### 2.2 要尽量原样复用的代码
+
+| CUADC函数/区域 | 复用方式 |
+|---|---|
+| `quaternion_rotate_vector` | 原样复用机体向量到ENU的四元数旋转数学代码 |
+| `transform_camera_to_body` | 保持相机光学系到body FRD的轴映射，扩展X/Y/Z安装平移参数 |
+| `_update_best_target_geo`的前半部分 | 只保留camera→body→ENU/local，不保留桶、GPS、WGS84和GeoTarget |
+| `project_pixel` | 原样复用像素+深度到相机系三维反投影，参数名改为platform/target |
+| `pixel_to_m` | 原样复用像素长度到米制的辅助换算 |
+| `image_callback`绘制顺序 | 检测→坐标变换→复制原图→目标标注→固定轴→浮动标签→底栏→发布→窗口 |
+| `draw_center_axes` | 尽量逐行原样复制，固定x红向右、y绿向下 |
+| `draw_overlay` | 保留显示风格，把YOLO框/桶改为双环椭圆、平台中心和来源 |
+| `draw_delta_label`、`draw_text_bg` | 原样或最小改名复用 |
+| `_truncate_text_to_width`、`draw_bottom_bar` | 原样复用半透明双栏、自适应字号和文本截断 |
+| 底栏颜色常量 | 保留目标黄、body天蓝、local/FC绿、warning红 |
+
+优先复制成熟函数后做最小适配，不要为了“代码更漂亮”重写一套未经验证的显示与变换代码。
+
+### 2.3 明确禁止复用的业务代码
+
+禁止引入：
+
+- YOLO/Ultralytics和模型加载；
+- `YoloDetection`、`BucketInfo`、`MissionStatus`、`GeoTarget`等CUADC消息；
+- bucket/tong/barrel/cylinder类别过滤；
+- 弹药、瞄准、抛投任务状态；
+- BUCKET BODY、BUCKET NED、BUCKET WGS84命名；
+- GPS、RTK、WGS84和经纬度换算；
+- 自动启动roscore或MAVROS；
+- CUADC专用话题和任务逻辑。
+
+所有目标命名统一使用`platform`或`target`。
+
+### 2.4 坐标系必须与CUADC显示一致
+
+```text
+camera optical: X右、Y下、Z前
+body FRD:       X前、Y右、Z下
+local ENU:      X东、Y北、Z上
+local NED显示: N=ENU.y、E=ENU.x、D=-ENU.z
+```
+
+下视相机基础旋转映射：
+
+```text
+X_body = -Y_cam
+Y_body =  X_cam
+Z_body =  Z_cam
+```
+
+加入实测安装平移：
+
+```text
+X_body += camera_mount_x_forward
+Y_body += camera_mount_y_right
+Z_body += camera_mount_z_down
+```
+
+随后复用`quaternion_rotate_vector(local_pose.orientation, body_vector)`得到ENU偏移，再与飞机当前local ENU位置相加得到靶标local ENU。
+
+坐标显示和数学映射按CUADC复用，但必须检查当前ROS TF命名：如果系统中的`base_link`实际定义为FLU，不得把FRD数值错误标成FLU。应使用可配置`body_frame`，必要时发布到`base_link_frd`，并通过前/右/下手持移动测试确认符号。
+
+必须发布和显示：
+
+```text
+TARGET CAMERA
+TARGET BODY FRD
+FC LOCAL ENU
+TARGET LOCAL ENU
+可选 TARGET LOCAL NED
+```
+
+不计算WGS84。
+
+### 2.5 双环目标的三维位置来源
+
+- AprilTag有效时：使用PnP得到camera系位置；
+- 几何双环有效时：优先读取对齐深度图中心小区域的有效深度中值，再调用CUADC `project_pixel`；
+- 深度无效时：可以预留用已知50cm外圆表观尺寸估算Z的低置信度回退，但本阶段不得伪装成高精度结果；
+- CameraInfo或深度缺失时仍可输出像素中心，但camera/body/local米制坐标必须标记无效。
+
+### 2.6 识别画面复用要求
+
+主窗口必须采用CUADC风格：
+
+1. 原始彩色画面作为主背景；
+2. 固定中心坐标轴直接复用`draw_center_axes`；
+3. 双环使用内外椭圆线绘制，平台中心使用红点和短十字；
+4. 目标旁浮动标签复用`draw_text_bg`和`draw_delta_label`；
+5. 底部固定半透明双栏复用`draw_bottom_bar`；
+6. 左栏状态、右栏camera/body/local坐标；
+7. 任何调试灰度、边缘或二值图只在可选debug话题/窗口中显示，不替代主窗口。
+
+## 3. 保留现有第一阶段节点
+
+必须继续支持：
 
 ```text
 scripts/apriltag_pose_viewer.py
 launch/apriltag_pose_viewer.launch
 ```
 
-双通道版本新建独立节点。第一阶段节点必须仍可单独启动，用于排查 Tag 问题。
+新增双通道节点：
 
-建议新增：
+```text
+scripts/platform_target_dual_node.py
+```
+
+建议结构：
 
 ```text
 d2026_vision/
 ├── setup.py
-├── src/
-│   └── d2026_vision/
-│       ├── __init__.py
-│       ├── apriltag_backend.py
-│       ├── geometry_backend.py
-│       ├── target_fusion.py
-│       ├── pose_utils.py
-│       └── temporal_filter.py
+├── src/d2026_vision/
+│   ├── __init__.py
+│   ├── apriltag_backend.py
+│   ├── geometry_backend.py
+│   ├── target_fusion.py
+│   ├── pose_utils.py
+│   ├── coordinate_transform.py
+│   ├── cuadc_display.py
+│   └── temporal_filter.py
 ├── scripts/
+│   ├── apriltag_pose_viewer.py
 │   └── platform_target_dual_node.py
 ├── config/
 │   ├── target_geometry.yaml
@@ -114,11 +402,9 @@ d2026_vision/
     └── test_fusion_logic.py
 ```
 
-如果当前包结构暂时不使用 `setup.py/src`，可以保持 ROS1 简单 Python 结构，但算法类必须与 ROS 回调解耦，不能把所有代码塞进一个 1000 行节点脚本。
+禁止把全部算法写进一个巨大ROS回调脚本。
 
----
-
-## 4. 配置文件
+## 4. 参数文件
 
 ### 4.1 `target_geometry.yaml`
 
@@ -128,15 +414,21 @@ inner_circle_diameter_m: 0.30
 line_width_m: 0.02
 expected_diameter_ratio: 0.60
 
-# 预处理
-clahe_clip_limit: 2.0
-clahe_grid_size: 8
+# 本阶段真正使用的基础处理
 gaussian_kernel: 5
-adaptive_block_size: 31
-adaptive_c: 7
-morph_kernel: 3
+canny_threshold1: 60
+canny_threshold2: 160
+basic_threshold_enable: true
+basic_threshold_value: 80
 
-# 椭圆候选
+# 只预留接口，默认关闭，本阶段不实现增强算法
+preprocess:
+  enable_color_enhance: false
+  enable_contrast_gain: false
+  enable_clahe: false
+  enable_adaptive_threshold: false
+  enable_binary_debug_view: false
+
 min_contour_points: 30
 min_ellipse_axis_px: 25
 max_ellipse_axis_px: 1400
@@ -145,7 +437,6 @@ diameter_ratio_tolerance: 0.12
 axis_ratio_similarity_tolerance: 0.15
 max_fit_residual_px: 4.0
 
-# 十字
 cross_roi_scale: 0.75
 hough_threshold: 35
 hough_min_line_length_px: 25
@@ -153,22 +444,19 @@ hough_max_line_gap_px: 12
 cross_angle_tolerance_deg: 15.0
 cross_center_tolerance_px: 20.0
 
-# 跟踪
 roi_enable: true
 roi_expand_ratio: 1.8
 roi_min_size_px: 180
 full_frame_retry_frames: 5
 ```
 
-所有阈值都必须允许通过 ROS 参数覆盖，不能只能改源码。
+所有阈值必须允许ROS参数覆盖。
 
 ### 4.2 `tag_layout.yaml`
 
-Tag 粘贴并测量前先保留模板：
-
 ```yaml
-# platform_frame: +X 小车前方，+Y 小车左侧，+Z 向上
-# 每个位置和 yaw 必须实测；enabled=false 表示暂不用于平台中心换算。
+# platform_frame: +X小车前方，+Y小车左侧，+Z向上
+# 必须实测后才enabled=true。
 tags:
   9:
     enabled: false
@@ -182,7 +470,7 @@ tags:
     yaw_platform_deg: 0.0
 ```
 
-禁止因为“计划贴在某处”就把 `enabled` 改为 true。必须贴好、测量并验证方向后再启用。
+禁止把“计划位置”当作实测外参。
 
 ### 4.3 `fusion.yaml`
 
@@ -195,158 +483,121 @@ tracking_confirm_frames: 5
 short_loss_timeout_s: 0.20
 lost_timeout_s: 0.50
 max_center_jump_px: 80.0
-
-# 融合权重只是初值
 geometry_center_weight: 0.65
 tag_center_weight: 0.35
 ```
 
-平台中心是圆环十字的直接几何中心，因此两路都可靠时，中心位置可以暂时更信任几何通道；平台方向更信任 AprilTag。
+## 5. 图像预处理预留（本阶段暂不实现增强功能）
 
----
-
-## 5. 图像输入和预处理
-
-订阅：
+本阶段只实现识别所必需的最小处理：
 
 ```text
-D435i RGB Image
-对应的 CameraInfo
-可选深度图
+BGR原图 -> 灰度 -> 轻度GaussianBlur -> Canny/基础阈值
 ```
 
-输入话题继续由 launch 参数指定。
+以下功能只写入配置、接口和TODO，默认关闭，不实现具体处理逻辑：
 
-预处理不得只有单一路径。建议并行生成：
+```yaml
+preprocess:
+  enable_color_enhance: false
+  enable_contrast_gain: false
+  enable_clahe: false
+  enable_adaptive_threshold: false
+  enable_binary_debug_view: false
+```
+
+代码中预留统一入口：
+
+```python
+processed, debug_views = preprocessor.process(frame, config)
+```
+
+当前关闭时必须直接返回基础灰度/边缘结果，不改变原图颜色。等取得不同光照、阴影和运动模糊的D435i实测图后，再单独决定是否实现：
+
+- 增色或饱和度调整；
+- 亮度/对比度增强；
+- CLAHE；
+- 自适应二值化；
+- 二值图调试窗口；
+- 形态学开闭运算。
+
+不要在本阶段擅自加入复杂预处理并调大量阈值，以免无法判断识别问题来自算法还是增强链路。
+
+## 6. 圆环识别
+
+### 6.1 候选生成
+
+从以下图像生成候选：
+
+1. Canny边缘图；
+2. `cv2.RETR_TREE` 二值轮廓。
+
+每条候选：
+
+- 点数达到阈值；
+- 至少5点才调用`fitEllipse`；
+- 过滤过小和过大的轴长；
+- 保存中心、长短轴、角度、拟合残差和轮廓完整度；
+- 不能只依赖固定轮廓层级，因为十字和圆环可能连接。
+
+### 6.2 内外椭圆配对
+
+评分至少包含：
 
 ```text
-原始 BGR
-  -> 灰度图
-  -> CLAHE 局部对比度增强
-  -> 轻度 GaussianBlur
-  -> adaptiveThreshold(BINARY_INV)
-  -> Canny edge
+center_score     两中心接近
+ratio_score      内外直径比接近0.60
+axis_score       两椭圆长短轴比例相近
+angle_score      两椭圆主轴角相近
+fit_score        拟合残差小
+temporal_score   与上一帧连续
+size_score       像素尺寸合理
 ```
 
-要求：
-
-- 保留原始图像用于 AprilTag；
-- 几何通道可以使用增强后的灰度、二值图和边缘图；
-- 不要在检测前无条件把 1280×720 缩小一半；
-- 若缩放，图像角点和 CameraInfo 必须同步缩放；
-- 形态学操作要轻，避免把 2 cm 线条和相邻结构粘成不可逆的大黑块；
-- 光照不均时优先 CLAHE + 自适应阈值，不要只设一个固定灰度阈值。
-
----
-
-## 6. 圆环识别后端
-
-### 6.1 为什么不能只用 HoughCircles
-
-下视相机存在倾斜、平台运动和透视，真实圆在图像中可能变成椭圆。因此：
-
-- `HoughCircles` 可以作为正视情况下的辅助候选；
-- 主路径应使用轮廓/边缘点 + `fitEllipse`；
-- 不得要求候选必须是完美圆形。
-
-### 6.2 候选生成
-
-建议同时从以下两类图产生轮廓：
-
-1. Canny 边缘图；
-2. 黑色区域二值图的轮廓树 `cv2.RETR_TREE`。
-
-每条候选轮廓：
-
-- 点数不少于配置值；
-- 至少 5 点才能 `fitEllipse`；
-- 过滤过小/过大的轴长；
-- 计算椭圆中心、长短轴、角度、拟合残差；
-- 记录轮廓层级，但不要只依赖固定层级，因为十字与圆环相交后可能形成复杂连通区域。
-
-### 6.3 同心椭圆配对
-
-在候选椭圆中寻找外圆和内圆的组合，评分至少包含：
-
-```text
-center_score      两椭圆中心距离
-ratio_score       内外直径比接近 0.30/0.50 = 0.60
-axis_score        两椭圆长短轴比例接近
-angle_score       两椭圆主轴方向接近
-fit_score         椭圆拟合残差
-size_score        像素尺寸符合当前高度/FOV 的合理范围
-temporal_score    与上一帧中心和尺度连续
-```
-
-不能只用面积比，因为透视、线宽和轮廓内外边缘都会改变面积。
-
-建议归一化后：
+建议：
 
 ```text
 ring_confidence =
-    0.25 * center_score
-  + 0.25 * ratio_score
-  + 0.15 * axis_score
-  + 0.10 * angle_score
-  + 0.15 * fit_score
-  + 0.10 * temporal_score
+  0.25*center_score +
+  0.25*ratio_score +
+  0.15*axis_score +
+  0.10*angle_score +
+  0.15*fit_score +
+  0.10*temporal_score
 ```
 
-### 6.4 圆环中心输出
+不能只使用面积比，也不能只用HoughCircles。
 
-候选对通过阈值后：
+### 6.3 圆环输出
 
-- 分别得到内外椭圆中心；
-- 以拟合残差和轮廓完整度加权得到 `ring_center_px`；
-- 保存外椭圆、内椭圆、表观轴长和置信度；
-- 若只检测到一个高质量外椭圆，可输出 `RING_PARTIAL`，但降低置信度。
-
----
-
-## 7. 十字识别后端
-
-十字和圆环相交，直接找一个十字轮廓通常不稳定。建议在圆环候选中心附近建立 ROI 后识别线段。
-
-### 7.1 ROI
-
-以 `ring_center_px` 为中心，ROI 尺寸根据内圆或外圆短轴确定，主要覆盖内圆内部和部分圆环。
-
-### 7.2 线段检测
-
-可使用：
-
-- `cv2.HoughLinesP`；
-- 二值图骨架化后提取长直线；
-- 轮廓局部直线拟合。
-
-第一版优先 `HoughLinesP`，但必须：
-
-- 过滤太短线段；
-- 将近似平行的线段按角度聚类；
-- 找两组近似垂直的主方向；
-- 对每组线段做加权直线拟合；
-- 求两条主线交点；
-- 检查交点是否接近圆环中心。
-
-不要只取最长两条 Hough 线，因为圆环切线、平台边缘和 AprilTag 边框都可能更长。
-
-### 7.3 十字置信度
-
-至少考虑：
+输出：
 
 ```text
-perpendicular_score  两主方向接近90°
-intersection_score   交点接近圆环中心
-support_score        两组方向各有足够线段支持
-symmetry_score       交点两侧线段长度大致对称
-temporal_score       交点和角度连续
+ring_center_px
+outer_ellipse
+inner_ellipse
+ring_confidence
+ring_state = FULL / PARTIAL / INVALID
 ```
 
-若没有圆环先验，允许十字单独搜索，但置信度上限降低，避免把 AprilTag 方框或平台边缘误认为十字。
+只看到一个高质量外椭圆时可`PARTIAL`，但置信度必须下降。
 
-### 7.4 十字中心输出
+## 7. 十字识别
 
-得到：
+以圆环候选中心建立ROI：
+
+1. 在ROI中执行HoughLinesP；
+2. 过滤短线段；
+3. 按角度对线段聚类；
+4. 找两组近似垂直的主方向；
+5. 每组使用多条线段加权拟合；
+6. 求两主线交点；
+7. 检查交点是否接近圆环中心；
+8. 检查交点两侧线段是否大致对称。
+
+不能只取最长两条线，因为圆环切线、平台边缘和Tag边框可能更长。
+
+输出：
 
 ```text
 cross_center_px
@@ -354,81 +605,36 @@ cross_angle_deg
 cross_confidence
 ```
 
-`cross_angle_deg` 只能表示图像中的一组十字轴方向，具有 90°/180°歧义，不能直接当作小车唯一航向。
-
----
+`cross_angle_deg`有90°/180°歧义。
 
 ## 8. 几何通道内部融合
 
-圆环中心和十字中心都有效时：
-
 ```text
-if distance(ring_center, cross_center) <= threshold:
-    geometry_center = weighted_average(...)
-    state = GEOMETRY_FULL
-else:
-    state = GEOMETRY_CONFLICT
-    不要直接平均
+圆环和十字都有效且中心接近 -> GEOMETRY_FULL
+只有高质量圆环             -> RING_PARTIAL
+只有十字                   -> 低置信度候选
+圆环和十字中心冲突         -> GEOMETRY_CONFLICT
 ```
 
-建议：
+冲突时不得直接平均。稳定结果结构建议使用不依赖ROS的`GeometryDetection`数据类，便于单元测试。
 
-- 圆环双椭圆完整时，圆心权重更高；
-- 十字线完整且圆环部分遮挡时，提高十字权重；
-- 冲突时保留上一帧稳定中心或输出无效，不能跳到错误中心；
-- 输出内部诊断分数，便于离线调参。
+## 9. AprilTag推算平台中心
 
-几何结果结构建议：
-
-```python
-@dataclass
-class GeometryDetection:
-    valid: bool
-    state: str
-    center_px: np.ndarray
-    confidence: float
-    ring_center_px: Optional[np.ndarray]
-    ring_confidence: float
-    cross_center_px: Optional[np.ndarray]
-    cross_confidence: float
-    outer_ellipse: Optional[tuple]
-    inner_ellipse: Optional[tuple]
-    cross_angle_deg: Optional[float]
-    reprojection_or_fit_error: float
-```
-
-该数据类不能依赖 ROS 消息，便于单元测试和离线图像测试。
-
----
-
-## 9. AprilTag 到平台中心
-
-复用第一阶段 AprilTag 后端，但增加 `tag_layout.yaml`。
-
-当某个 Tag 已完成实测并 `enabled=true`：
+复用第一阶段Tag检测。只有`tag_layout.yaml`中完成实测且`enabled=true`的Tag可用于平台中心：
 
 ```text
 T_camera_platform = T_camera_tag × inverse(T_platform_tag)
 ```
 
-必须使用完整刚体变换，包括旋转和平移，不能只把 Tag 的像素中心减去一个固定像素偏移。
+约束：
 
-多个 Tag 可见时：
+- 使用完整旋转和平移；
+- 未测布局的Tag只输出Tag位姿；
+- 多Tag先做离群检查；
+- 旋转不能直接平均欧拉角；
+- 第一版可以先选重投影误差最小的有效Tag，再逐步加入多Tag融合。
 
-- 每个 Tag 都可产生一个平台中心候选；
-- 先检查 ID、尺寸、重投影误差和布局是否启用；
-- 剔除明显离群候选；
-- 平移可做加权平均；
-- 旋转使用旋转矩阵/四元数方法，禁止直接平均欧拉角；
-- 第一版可先选重投影误差最小的 Tag，稳定后再做多 Tag 融合。
-
-如果 Tag 只完成单体位姿、尚未测量布局，则它可以用于显示和 ID 识别，但不得声称已经得到平台中心。
-
----
-
-## 10. 两通道最终融合
-
-统一结果来源状态：
+## 10. 最终融合状态机
 
 ```text
 LOST
@@ -439,333 +645,178 @@ CONFLICT
 INVALID
 ```
 
-### 10.1 两路均有效
+规则：
 
-比较：
+- 两中心差不超过阈值：置信度加权，状态`FUSED`；
+- 平台中心暂时更信任圆环十字；
+- 平台非对称方向更信任AprilTag；
+- 只有几何：输出中心，yaw为AMBIGUOUS；
+- 只有Tag：必须有有效Tag布局；
+- 中心冲突：不平均，质量不足时`visible=false`；
+- 连续5帧确认跟踪；
+- 短时丢失0.2s；
+- 超过0.5s进入LOST。
 
-```text
-d = norm(tag_platform_center_px - geometry_center_px)
-```
+## 11. 像素误差和米制位置
 
-若 `d <= max_center_disagreement_px`：
-
-- 中心做置信度加权；
-- 状态 `FUSED`；
-- 置信度增加，但最大不超过 1；
-- 平台航向优先取 AprilTag；
-- 圆环十字用于中心校正。
-
-若 `d` 超限：
-
-- 状态 `CONFLICT`；
-- 不允许简单平均；
-- 根据各自质量、时间连续性和上一帧结果选择暂时输出；
-- 低于安全阈值则 `visible=false`；
-- debug 图必须同时画出两个中心和差值。
-
-### 10.2 只有几何通道
-
-- 状态 `GEOMETRY_ONLY`；
-- 可输出平台中心和像素偏差；
-- 航向标记为 ambiguous/unknown；
-- 允许后续控制器做低速水平对准，但不应依赖其唯一 yaw。
-
-### 10.3 只有 AprilTag 通道
-
-- 已有有效布局：状态 `TAG_ONLY`，可输出平台中心；
-- 没有布局：只能输出 Tag 位姿，平台中心 `visible=false`。
-
----
-
-## 11. 像素中心到米制水平误差
-
-第一版优先稳定输出像素误差：
+第一版优先输出：
 
 ```text
-error_u = platform_center_u - image_cx
-error_v = platform_center_v - image_cy
+error_u = platform_u - cx
+error_v = platform_v - cy
 ```
 
-如果已知平台平面到相机的距离 `Z`，近似水平相机模型：
+近似关系：
 
 ```text
-x_camera ≈ (u - cx) / fx × Z
-y_camera ≈ (v - cy) / fy × Z
+x_camera ≈ (u-cx)/fx × Z
+y_camera ≈ (v-cy)/fy × Z
 ```
 
-但正式使用应考虑：
+正式米制换算必须考虑相机安装外参、飞机roll/pitch、相机中心偏移和平台平面，通过相机射线与平台平面求交。禁止把图像u/v直接当作飞机x/y。
 
-- 相机下视安装旋转；
-- 飞机 roll/pitch；
-- 相机相对飞机中心的平移；
-- 平台平面高度；
-- ROS optical frame 到 `base_link` 的 TF。
-
-更稳妥的是把像素点通过相机内参变成射线，再通过当前飞机姿态与高度和平台平面求交。不要把图像 `u/v` 直接当作飞机 `x/y`。
-
-圆环的已知直径可以提供尺度检查，但仅凭一个倾斜椭圆直接声称精确 6DoF 位姿风险较高。第二阶段先把“稳定平台中心”做好，再逐步加入平面姿态估计。
-
----
-
-## 12. ROS 输出接口
-
-建议统一发布：
+## 12. ROS接口
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `/d2026_vision/platform_visible` | `std_msgs/Bool` | 当前平台中心是否可供控制器使用 |
-| `/d2026_vision/platform_center_px` | `geometry_msgs/Vector3Stamped` | `x=error_u`，`y=error_v`，`z=confidence` |
-| `/d2026_vision/platform_pose_camera` | `geometry_msgs/PoseWithCovarianceStamped` | 仅在米制位姿有效时发布 |
-| `/d2026_vision/detection_source` | `std_msgs/String` | `TAG_ONLY/GEOMETRY_ONLY/FUSED/...` |
-| `/d2026_vision/ring_center_px` | `geometry_msgs/PointStamped` | 圆环中心诊断 |
-| `/d2026_vision/cross_center_px` | `geometry_msgs/PointStamped` | 十字中心诊断 |
-| `/d2026_vision/tag_center_px` | `geometry_msgs/PointStamped` | Tag 推算的平台中心诊断 |
-| `/d2026_vision/debug_image` | `sensor_msgs/Image` | 最终叠加图 |
-| `/d2026_vision/geometry_debug_image` | `sensor_msgs/Image` | 阈值、边缘、椭圆、线段调试图 |
+| `/d2026_vision/platform_visible` | `std_msgs/Bool` | 控制可用状态 |
+| `/d2026_vision/platform_center_px` | `geometry_msgs/Vector3Stamped` | x=error_u,y=error_v,z=confidence |
+| `/d2026_vision/platform_pose_camera` | `geometry_msgs/PoseWithCovarianceStamped` | 仅有效米制位姿 |
+| `/d2026_vision/platform_point_camera` | `geometry_msgs/PointStamped` | 靶标相对相机光学系 |
+| `/d2026_vision/platform_point_body` | `geometry_msgs/PointStamped` | 靶标相对机体FRD |
+| `/d2026_vision/platform_point_local` | `geometry_msgs/PointStamped` | 靶标在MAVROS local ENU中的位置 |
+| `/d2026_vision/detection_source` | `std_msgs/String` | 状态/来源 |
+| `/d2026_vision/ring_center_px` | `geometry_msgs/PointStamped` | 圆环诊断 |
+| `/d2026_vision/cross_center_px` | `geometry_msgs/PointStamped` | 十字诊断 |
+| `/d2026_vision/tag_center_px` | `geometry_msgs/PointStamped` | Tag平台中心诊断 |
+| `/d2026_vision/debug_image` | `sensor_msgs/Image` | 最终调试图 |
+| `/d2026_vision/geometry_debug_image` | `sensor_msgs/Image` | 几何中间图 |
 
-所有消息继承输入图像时间戳。无效结果不得发布伪造的零位姿；使用 `platform_visible=false` 和状态说明原因。
+全部继承图像时间戳。无效时不发布伪造零位姿。
 
----
+## 13. 性能和ROI
 
-## 13. 调试窗口
+- LOST时全图搜索；
+- TRACKING后使用围绕上一中心的动态ROI；
+- ROI按外椭圆尺度扩展；
+- 连续失败后返回全图；
+- 不重复颜色转换和映射初始化；
+- 分阶段记录耗时；
+- 整体频率最低目标15Hz，理想20Hz以上；
+- 先使用ROI优化，不要过早降分辨率。
 
-默认调试模式显示一个拼接窗口：
+## 14. 安全边界
 
-```text
-左上：原始图 + 最终中心/来源
-右上：灰度/CLAHE
-左下：二值图 + 椭圆候选
-右下：Canny/Hough 线段 + 十字交点
-```
+禁止：
 
-颜色约定：
+- 发布MAVROS setpoint；
+- 解锁、切换模式、起飞或降落；
+- 修改PX4、MAVROS、FAST-LIO2参数；
+- 修改已经验证的自动起飞和航点代码；
+- 单帧成功直接触发降落；
+- 目标丢失后沿最后速度盲飞。
 
-- 绿色：最终接受结果；
-- 蓝色：圆环中心；
-- 黄色：十字中心；
-- 紫色：AprilTag 推算平台中心；
-- 红色：冲突或无效候选。
+## 15. 分阶段实现
 
-显示：
+### G0 离线框架
 
-```text
-state
-final confidence
-ring confidence
-cross confidence
-tag confidence
-center disagreement px
-FPS
-ROI/full-frame mode
-```
+- 单图和视频输入；
+- 算法与ROS解耦；
+- 保存所有中间调试图。
 
-按 `q` 正常退出；`show_window=false` 时只发布 debug image，不调用 GUI。
+### G1 双椭圆圆心
 
----
+- 椭圆候选；
+- 内外配对；
+- 圆心和置信度。
 
-## 14. 跟踪和性能
+### G2 十字校验
 
-为了在 Orin NX 上保持实时：
+- ROI线段；
+- 角度聚类；
+- 十字交点；
+- 几何FULL/CONFLICT。
 
-1. 初次或 LOST 时全图搜索；
-2. TRACKING 后围绕上一帧平台中心建立 ROI；
-3. ROI 需要随外圆尺度动态扩展；
-4. 连续若干帧失败后回到全图；
-5. AprilTag 和几何通道可以处理同一原始帧；
-6. 不要重复多次颜色转换和畸变校正；
-7. 记录每个阶段耗时；
-8. 目标整节点频率不低于 15 Hz，理想不低于 20 Hz。
+### G3 Tag布局
 
-避免为了 FPS 过早降采样。先用 ROI、减少候选和缓存映射表优化。
+- 实测位置与yaw；
+- Tag到平台刚体变换；
+- 单Tag和多Tag测试。
 
----
+### G4 坐标变换与双通道融合
 
-## 15. 安全边界
+- 复用CUADC camera→body FRD→local ENU变换；
+- 固定轴、浮动标签和底部双栏；
+- 五种主要状态；
+- 时序过滤；
+- ROS输出；
+- rosbag复现。
 
-双通道视觉节点禁止：
+### G5 实时观察
 
-- 发布 `/mavros/setpoint_*`；
-- 解锁、切换模式或调用降落；
-- 修改 PX4、MAVROS、FAST-LIO2 参数；
-- 修改已验证的自动起飞和航点控制逻辑；
-- 在单帧检测成功时直接宣布可降落；
-- 丢失目标后继续沿最后速度盲飞。
+无人机悬停时只看视觉输出，不接入控制。通过后再单独设计视觉伺服。
 
-控制器未来只能订阅稳定、带时间戳、带置信度的统一输出。
-
----
-
-## 16. 分阶段实现
-
-### G0：离线图像框架
-
-- [ ] 算法类与 ROS 解耦；
-- [ ] 支持读取单张图片和视频；
-- [ ] 输出中间图和候选评分；
-- [ ] 先用平台打印图、手机照片和 D435i 静态图测试。
-
-### G1：双椭圆圆心
-
-- [ ] 检测内外椭圆候选；
-- [ ] 按中心、直径比、轴比、角度评分；
-- [ ] 输出 ring center 和 confidence；
-- [ ] 不要求十字和 Tag。
-
-### G2：十字校验
-
-- [ ] ROI 内 Hough/直线聚类；
-- [ ] 求近似垂直主线交点；
-- [ ] 与圆心比较；
-- [ ] 输出 geometry full/conflict。
-
-### G3：AprilTag 平台布局
-
-- [ ] 实测 Tag 位置和朝向；
-- [ ] 写入 `tag_layout.yaml`；
-- [ ] 从 Tag 位姿推算平台中心；
-- [ ] 单 Tag 和多 Tag 测试。
-
-### G4：双通道融合
-
-- [ ] TAG_ONLY/GEOMETRY_ONLY/FUSED/CONFLICT；
-- [ ] 时序过滤和丢失保护；
-- [ ] 输出统一 ROS 接口；
-- [ ] 录 bag 离线复现。
-
-### G5：悬停只观察
-
-- [ ] 无人机已有定点和航点功能；
-- [ ] 悬停时只查看视觉输出，不接入控制；
-- [ ] 手动移动平台验证方向、延迟和跳变；
-- [ ] 通过后才另写视觉伺服控制提示词。
-
----
-
-## 17. 验收测试矩阵
-
-必须分别测试：
+## 16. 验收矩阵
 
 | 场景 | 期望 |
 |---|---|
-| 无 Tag、完整圆环十字 | `GEOMETRY_ONLY` |
-| 有 Tag、遮住部分圆环 | `TAG_ONLY` 或有效融合降级 |
-| Tag 和几何均完整 | `FUSED` |
-| Tag 位姿故意配置错误 | `CONFLICT`，不能盲目平均 |
-| 只看到一个圆 | 低置信度 `RING_PARTIAL` 或无效 |
-| 平台倾斜 | 圆按椭圆处理，中心仍连续 |
-| 光照阴影 | CLAHE/自适应阈值后不大幅跳变 |
-| AprilTag 方框干扰十字 | 不把 Tag 边框当作主十字 |
-| 平台边缘进入画面 | 不把平台边缘配成十字 |
-| 短时遮挡 | 进入短时丢失，不能输出大跳变 |
+| 无Tag、完整圆环十字 | GEOMETRY_ONLY |
+| 有Tag、圆环部分遮挡 | TAG_ONLY或降级融合 |
+| 两路完整 | FUSED |
+| Tag布局故意配错 | CONFLICT |
+| 只看到一个圆 | PARTIAL或无效 |
+| 平台倾斜 | 按椭圆识别，中心连续 |
+| 光照阴影 | 不大幅跳变 |
+| Tag方框干扰 | 不误认为十字 |
+| 平台边缘进入画面 | 不误配十字 |
+| 短时遮挡 | 不输出大跳变 |
+| 靶标向图像右移动 | camera X增大，固定x轴仍指右 |
+| 靶标向图像下移动 | camera Y增大，固定y轴仍指下 |
+| 手持靶标向机头前方移动 | body FRD X增大 |
+| 飞机姿态/位置变化 | target local ENU按CUADC逻辑连续变化 |
 
-建议目标：
+目标值：
 
-- 静止完整图案，平台中心标准差不超过 3～5 px；
-- 1.5 m 高度正常光照下连续 30 s 检出率不低于 95%；
-- 双通道中心一致时差值稳定；
-- 丢失超过 0.5 s 明确 `LOST`；
-- 节点整体处理频率不低于 15 Hz。
+- 静止平台中心标准差3～5px以内；
+- 1.5m正常光照连续30s检出率不低于95%；
+- 丢失超过0.5s明确LOST；
+- 节点整体不低于15Hz。
 
----
-
-## 18. 可直接复制给机载 Codex 的提示词
+## 17. AI最终交付报告格式
 
 ```text
-你现在在 Orin NX 的 ROS1 Noetic 工作空间：
-/home/password123456/catkin_ws
-
-现有包：
-/home/password123456/catkin_ws/src/d2026_vision
-已经或正在实现单 AprilTag 识别节点 apriltag_pose_viewer.py。不得破坏该节点，必须保持它可单独运行。
-
-飞机已经实现室内定点和航点飞行。本任务只开发视觉感知，不接入飞控。禁止发布 /mavros/setpoint_*，禁止解锁、模式切换和降落调用，禁止修改 PX4、MAVROS、FAST-LIO2、px4_basic_control 和已有航点控制代码。
-
-目标是在 d2026_vision 中增加“AprilTag + 同心圆十字”双通道平台识别节点：
-scripts/platform_target_dual_node.py
-
-规定靶标：外圆直径0.50m、内圆直径0.30m、圆环和十字线宽0.02m。相机下视，圆在倾斜和透视下会成为椭圆，因此不能只用 HoughCircles。
-
-请先审计现有 d2026_vision 文件、Git 状态、D435i 图像和 CameraInfo 话题、OpenCV 版本及当前 AprilTag 节点接口。不要重写已经工作的代码。
-
-新增模块建议：
-src/d2026_vision/apriltag_backend.py
-src/d2026_vision/geometry_backend.py
-src/d2026_vision/target_fusion.py
-src/d2026_vision/pose_utils.py
-src/d2026_vision/temporal_filter.py
-scripts/platform_target_dual_node.py
-config/target_geometry.yaml
-config/tag_layout.yaml
-config/fusion.yaml
-launch/platform_target_dual.launch
-launch/platform_target_dual_debug.launch
-test/test_geometry_scoring.py
-test/test_tag_to_platform.py
-test/test_fusion_logic.py
-
-几何通道要求：
-1. 原始BGR保留给AprilTag；几何通道生成灰度、CLAHE、轻度高斯、自适应反二值和Canny图；
-2. 从Canny和RETR_TREE轮廓中生成椭圆候选，使用fitEllipse；
-3. 按同心度、内外直径比0.60、长短轴比例相似、主轴角相似、拟合残差、尺寸范围和时间连续性对候选对评分；
-4. 输出ring_center_px、内外椭圆和ring_confidence；
-5. 在圆心附近ROI使用HoughLinesP，但不能只取最长两条线；按角度聚类后拟合两组近似垂直主线并求交点；
-6. 检查十字交点与圆心距离、垂直角、线段支持和对称性，输出cross_center_px和cross_confidence；
-7. 圆心与十字一致才输出GEOMETRY_FULL；冲突时输出GEOMETRY_CONFLICT，禁止直接平均；
-8. 规定十字有90/180度方向歧义，几何通道不能声称得到唯一小车航向。
-
-AprilTag通道要求：
-1. 复用现有按ID查实测黑色外框边长的逻辑；
-2. 新增tag_layout.yaml，记录每个Tag在platform_frame中的实测位置和yaw；
-3. 只有enabled=true且完成实测的Tag才能用于推算平台中心；
-4. 使用完整刚体变换 T_camera_platform = T_camera_tag × inverse(T_platform_tag)；
-5. 未测布局的Tag只能输出Tag位姿，不能伪造平台中心；
-6. 多Tag先做离群检查，禁止直接平均欧拉角。
-
-融合要求：
-1. 状态包含 LOST、TAG_ONLY、GEOMETRY_ONLY、FUSED、CONFLICT、INVALID；
-2. 两路中心差不超过可配置阈值时按置信度融合，平台中心暂时更信任圆环十字，平台航向更信任AprilTag；
-3. 两路冲突时不能盲目平均，必须显示两个中心和差值，质量不足则visible=false；
-4. 只有几何通道时可输出中心，但yaw标记为unknown/ambiguous；
-5. 时序要求连续5帧确认，短时丢失0.2s，超过0.5s LOST，阈值全部YAML化。
-
-ROS输出：
-/d2026_vision/platform_visible std_msgs/Bool
-/d2026_vision/platform_center_px geometry_msgs/Vector3Stamped，其中x=中心u-cx，y=v-cy，z=confidence
-/d2026_vision/platform_pose_camera geometry_msgs/PoseWithCovarianceStamped，仅米制位姿有效时发布
-/d2026_vision/detection_source std_msgs/String
-/d2026_vision/ring_center_px geometry_msgs/PointStamped
-/d2026_vision/cross_center_px geometry_msgs/PointStamped
-/d2026_vision/tag_center_px geometry_msgs/PointStamped
-/d2026_vision/debug_image sensor_msgs/Image
-/d2026_vision/geometry_debug_image sensor_msgs/Image
-所有消息继承输入图像时间戳；无效时不发布伪造零位姿。
-
-调试窗口默认显示原图最终结果、CLAHE、二值/椭圆候选、Canny/Hough十字线段四宫格；显示状态、各通道置信度、中心差、FPS和ROI状态；q退出；show_window=false支持headless。
-
-请按G0到G4分步实现，不要一次写完后才测试：
-G0 离线单图/视频框架；
-G1 双椭圆圆心；
-G2 十字校验；
-G3 Tag布局到平台中心；
-G4 双通道融合与ROS接口。
-每完成一步都要提供真实图片/rosbag测试结果和debug输出。未连接相机或缺少实物时明确写未实机验证，不得虚构。
-
-完成后执行Python语法检查、单元测试、catkin构建和git diff自查；确认没有修改飞控控制链路；README写清算法、参数、话题、状态、坐标系、运行命令、已知限制和测试数据；列出所有新增/修改文件。
+1. 本次完成阶段：G0/G1/G2/G3/G4/G5
+2. 新增文件：
+3. 修改文件：
+4. 未修改的飞控文件确认：
+5. 实际构建命令及结果：
+6. 实际启动命令：
+7. 输入话题、分辨率、频率、frame_id：
+8. 输出话题：
+9. 已验证状态：
+10. 当前FPS：
+11. 静止中心标准差：
+12. 识别率和测试时长：
+13. 使用的图片、视频或rosbag：
+14. 未实机验证内容：
+15. 已知问题：
+16. 下一步建议：
+17. git status和git diff摘要：
 ```
 
----
+没有真实数据时必须写“未测试”或“未实机验证”。
 
-## 19. 最短实施顺序
+## 18. 最短实施顺序
 
 ```text
-保留现有 AprilTag viewer
-  -> 离线实现双椭圆中心
-  -> 增加十字交点校验
-  -> 实机只看几何通道
-  -> 实测 Tag 到平台中心布局
-  -> Tag 推算平台中心
-  -> 两通道冲突检测与融合
-  -> 悬停状态只观察
+保留AprilTag viewer
+  -> 离线双椭圆中心
+  -> 十字交点校验
+  -> D435i几何通道实测
+  -> 实测Tag布局
+  -> Tag推算平台中心
+  -> 冲突检测和融合
+  -> 悬停只观察
   -> 另行设计限速视觉伺服
   -> 最后动态降落
 ```
