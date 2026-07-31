@@ -1,6 +1,6 @@
-﻿---
+---
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 status: 可直接交给机载 Codex 执行
 stage: 视觉第一阶段——单 AprilTag 识别与相机系位姿
 platform: ROS1 Noetic + Python3 + OpenCV + D435i + Orin NX
@@ -10,6 +10,7 @@ work_target: /home/password123456/catkin_ws/src/d2026_vision
 related:
   - AprilTag平台识别功能包需求与分步提示词.md
   - 视觉识别模块说明.md
+  - 2026D视觉第二阶段_圆环十字与AprilTag双通道提示词.md
 ---
 
 # 2026 D vision 第一阶段：AprilTag 识别脚本开发提示词
@@ -36,7 +37,7 @@ related:
 | 18 | 8 cm | `0.08 m` |
 | 19 | 8 cm | `0.08 m` |
 
-这里的“边长”必须在实现前再次确认是 AprilTag 用于位姿估计的**编码外边界/检测边界边长**，不能把整张纸的白色留边误当成 `tag_size`。如果实测值与上述值不同，以实测值为准并修改 YAML。
+这里的“边长”应实测为 AprilTag **黑色正方形外边框的外缘到外缘**。OpenCV 标准检测 corners 应落在这四个黑色外角。黑色标签外的白色静区、A4 纸白边和额外装饰边框不得计入 `tag_size`。具体规则、贴标位置和异常角点处理见本文第 13 节。
 
 后续计划：
 
@@ -479,3 +480,340 @@ launch 默认参数先尝试：
 5. 输出平台相对飞机 `base_link` 的位姿；
 6. 录包验证后，再把结果交给伴飞控制器；
 7. 最后才进入动态降落。
+
+---
+
+## 13. 贴标合规、黑色外边框尺寸与 PnP 修正
+
+### 1. 规则核查结论
+
+原题“系统要求（6）”明确要求：
+
+- 小车平台不超过 `60 cm × 60 cm`；
+- 平台中心**需绘制**直径 `30 cm`、`50 cm` 的两个黑色同心圆环和十字；
+- 线宽 `2 cm ± 0.2 cm`；
+- 该图案可用于视觉引导。
+
+问答又明确：
+
+- Q8：小车平台可以加 AprilTag；
+- Q13：可以增加 AprilTag、二维码或彩色方向标志；
+- Q22：降落平台可以贴类似二维码的标签；
+- Q23：可以张贴文字或特殊标识。
+
+因此可以确定：**增加 AprilTag 本身合规。**
+
+但问答没有明确说：
+
+- 可以覆盖规定的十字；
+- 可以覆盖或截断 30/50 cm 圆环；
+- 可以用 AprilTag 替换原规定图案。
+
+所以“允许增加 AprilTag”不能直接推导为“可以把 15 cm Tag 无条件贴在中心并遮住十字”。正式比赛应采用保守解释：**辅助标记可以增加，但规定圆环和十字尽量保持完整、清晰、连续可见。**
+
+### 2. 当前两个贴标计划的风险
+
+平台坐标定义：圆心为原点，`+X` 朝小车前方，`+Y` 朝小车左侧。
+
+#### 2.1 9 号 15 cm Tag 贴在中心 `(0,0)`
+
+15 cm 正方形会覆盖中心约 `±7.5 cm` 的区域：
+
+- 不会直接覆盖半径 15 cm 的内圆；
+- 但是会把十字中心的大段黑线完全遮住；
+- 原题要求“平台中心需绘制……十字图案”，裁判可能认为规定图案不完整。
+
+结论：
+
+- **实验阶段可以这样贴，便于先验证识别与控制；**
+- **正式测试前不能无脑采用；**
+- 必须向现场裁判提出精确问题并保留答复：
+
+> 问答允许在小车平台增加 AprilTag。若保留 30 cm 和 50 cm 两个圆环完整可见，但在圆心放置一个 15 cm AprilTag，导致十字中心部分被遮挡，是否仍满足“平台中心需绘制同心圆环和十字图案”的要求？
+
+没有明确肯定答复时，不建议正式使用中心 15 cm Tag。
+
+#### 2.2 11 号 4 cm Tag 贴在 `(＋15 cm, 0)`
+
+这个点正好是：
+
+- 半径 15 cm 的内圆前端；
+- 十字前向水平线；
+- 内圆和十字的交点。
+
+4 cm Tag 会同时遮挡内圆和十字，因此虽然遮挡面积较小，也不是最保守的位置。
+
+建议把 11 号 Tag 移到内圆内部的白色象限，例如：
+
+```text
+推荐初始中心：(+7 cm, +7 cm)
+或：          (+7 cm, -7 cm)
+```
+
+对于边长 4 cm 的正方形，中心放在 `(7,7) cm` 时：
+
+- Tag 范围约为 `x=5～9 cm, y=5～9 cm`；
+- 不接触 2 cm 宽的十字；
+- 最远角到圆心约 `12.7 cm`；
+- 与内圆黑线内边缘约 `14 cm` 仍有余量。
+
+最终位置要结合起落架、抛投物落点和可见性实测。
+
+### 3. 15 cm Tag 的更稳妥替代
+
+在 60 cm 方形平台、直径 50 cm 圆环完整保留的条件下，15 cm Tag 很难完全放到外圆之外：放在角落仍会侵入外圆区域。
+
+建议重新打印同一 ID 9，改为边长约 `10 cm`：
+
+- 10 cm Tag 可放在 60 cm 平台角落；
+- 例如占据 `x=20～30 cm, y=20～30 cm`；
+- 其最近角到圆心约 `28.3 cm`；
+- 外圆黑线最外缘约为半径 `26 cm`，仍有约 `2.3 cm` 间隔；
+- 不遮挡 50 cm 圆环和十字；
+- 相比 8 cm Tag，像素边长增加 25%。
+
+配置中的 ID 9 尺寸随后从 `0.15` 改为实测的约 `0.10 m`。不要同时使用两个不同物理尺寸、但 ID 都为 9 的标签。
+
+如果坚持使用 15 cm Tag，优先只把它用于实验或寻靶区的临时验证；正式平台是否使用，等待裁判确认。
+
+---
+
+### 4. OpenCV 的 Tag 边长到底指哪里
+
+对于标准 `tag36h11`：
+
+- 中间是 `6 × 6` 数据单元；
+- 数据外有 1 单元宽的黑色边框；
+- 因而有效黑色标签区域为 `8 × 8` 单元；
+- 官方图片通常还在黑色区域外保留白色静区，整张最小图可能表现为 `10 × 10` 单元。
+
+#### 正确的 `tag_size`
+
+如果使用 OpenCV：
+
+```python
+cv2.aruco.DICT_APRILTAG_36h11
+cv2.aruco.ArucoDetector.detectMarkers(...)
+```
+
+返回的标准 `corners` 应对应**标签黑色正方形的四个外角**，也就是黑色外边框的外边缘。
+
+因此你测量的：
+
+```text
+黑色外边框外缘到外缘的长度
+```
+
+就是 PnP 应使用的 `tag_size`：
+
+```yaml
+9: 0.15
+11: 0.04
+16: 0.08
+```
+
+前提是这些确实是实测黑色正方形边长。
+
+不应计入：
+
+- 黑色标签外面的白色静区；
+- A4 纸剩余白边；
+- 为固定纸张额外画出的边框。
+
+如果测量的是包含一单元白色静区的完整 `10 × 10` 图像宽度，则标准黑色标签边长约为：
+
+```text
+black_size = total_image_size × 8 / 10
+```
+
+但只有在打印文件确实严格采用上述 10 单元结构时才能这样换算，最好直接用尺测黑色正方形。
+
+### 5. 为什么画面看起来只框住“内部二维码”
+
+先区分三种情况：
+
+#### 情况 A：框住黑色外边框，外面还留有白边
+
+这是正常现象。白色静区不属于 `tag_size`，不应该被检测框包进去。
+
+#### 情况 B：框只包住 6×6 数据区，没有包住黑色边框
+
+这不是标准 OpenCV `detectMarkers()` 的正常输出，常见原因：
+
+- 脚本没有使用 `detectMarkers` 返回的原始 `corners`；
+- 后续代码自己寻找了内部数据区轮廓；
+- 绘图时使用了错误的另一组角点；
+- 对图像裁剪、缩放后，角点和显示图不在同一坐标尺度；
+- 使用的不是 OpenCV ArUco/AprilTag 标准角点接口。
+
+#### 情况 C：检测框正确，但距离仍不准
+
+常见原因：
+
+- `tag_size` 填成了整张纸宽度；
+- 图像缩放后没有同步缩放 CameraInfo 中的 `fx/fy/cx/cy`；
+- 相机内参或畸变参数不对应当前分辨率；
+- Tag 不平整、打印比例错误；
+- 运动模糊、曝光过长；
+- 物体点顺序与图像角点顺序不一致。
+
+---
+
+### 6. 推荐的代码写法
+
+#### 6.1 必须直接使用检测器返回的四角
+
+```python
+marker_corners = corners[i].reshape(4, 2).astype(np.float64)
+tag_id = int(ids[i][0])
+tag_size = tag_sizes_m[tag_id]  # 黑色外边框外缘到外缘，单位 m
+
+half = tag_size / 2.0
+object_points = np.array([
+    [-half,  half, 0.0],  # left-top
+    [ half,  half, 0.0],  # right-top
+    [ half, -half, 0.0],  # right-bottom
+    [-half, -half, 0.0],  # left-bottom
+], dtype=np.float64)
+
+ok, rvec, tvec = cv2.solvePnP(
+    object_points,
+    marker_corners,
+    camera_matrix,
+    dist_coeffs,
+    flags=cv2.SOLVEPNP_IPPE_SQUARE,
+)
+```
+
+不要把内部数据格的角点送入上面这段 PnP。
+
+#### 6.2 单独画出原始角点做验证
+
+```python
+for index, point in enumerate(marker_corners):
+    p = tuple(np.round(point).astype(int))
+    cv2.circle(debug_image, p, 6, (0, 0, 255), -1)
+    cv2.putText(
+        debug_image,
+        str(index),
+        (p[0] + 5, p[1] - 5),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 0, 255),
+        2,
+    )
+
+cv2.polylines(
+    debug_image,
+    [np.round(marker_corners).astype(np.int32)],
+    True,
+    (0, 255, 0),
+    2,
+)
+```
+
+把标签近距离正视相机：四个红点和绿色框应该落在黑色正方形的四个外角，而不是 6×6 数据区角点。
+
+#### 6.3 检查是否错误缩放
+
+如果检测前把图像从 `1280×720` 缩小到 `640×360`，必须二选一：
+
+1. 在原始分辨率图像上检测和 PnP；或
+2. 角点与内参一起按相同比例缩放。
+
+例如缩小一半：
+
+```python
+camera_matrix_scaled = camera_matrix.copy()
+camera_matrix_scaled[0, 0] *= 0.5  # fx
+camera_matrix_scaled[1, 1] *= 0.5  # fy
+camera_matrix_scaled[0, 2] *= 0.5  # cx
+camera_matrix_scaled[1, 2] *= 0.5  # cy
+```
+
+最稳妥的第一版是不要在检测前缩图。
+
+### 7. 如果确认库真的只返回内部 6×6 角点
+
+标准 OpenCV 一般不需要这一步。只有经过近距离截图确认，四角确实落在 6×6 数据区边界时，才进行转换。
+
+不要简单围绕图像中心乘 `8/6`，因为倾斜视角下透视变换不是普通二维缩放。应根据内部方形求单应矩阵，再投影到黑色外边框：
+
+```python
+inner_model = np.array([
+    [-3.0,  3.0],
+    [ 3.0,  3.0],
+    [ 3.0, -3.0],
+    [-3.0, -3.0],
+], dtype=np.float32)
+
+outer_model = np.array([
+    [-4.0,  4.0],
+    [ 4.0,  4.0],
+    [ 4.0, -4.0],
+    [-4.0, -4.0],
+], dtype=np.float32)
+
+H = cv2.getPerspectiveTransform(inner_model, detected_inner_corners.astype(np.float32))
+outer_corners = cv2.perspectiveTransform(
+    outer_model.reshape(1, 4, 2), H
+).reshape(4, 2)
+```
+
+然后才用 `outer_corners` 和黑色外边框实测边长做 PnP。
+
+**警告：**如果 OpenCV 原始 `corners` 本来已经是黑色外角，再错误乘 `8/6`，解算距离会产生约 33% 的系统性尺度错误。
+
+---
+
+### 8. 8 cm Tag 在 1.5 m 检测不稳的排查顺序
+
+不要立即只归因于物理尺寸。先打印相机内参并估算 Tag 像素宽度：
+
+```text
+expected_tag_pixels ≈ fx × tag_size_m / distance_m
+```
+
+例如实际 `fx=900 px`、Tag 为 `0.08 m`、距离 `1.5 m`：
+
+```text
+expected ≈ 900 × 0.08 / 1.5 = 48 px
+```
+
+48 px 正常情况下应有机会检测；如果实际只有二十多个像素，检测会明显变差。
+
+按顺序检查：
+
+1. D435i RGB 是否为 `1280×720`，而不是 `640×480/360`；
+2. 检测前是否又做了 resize 或 decimate；
+3. Tag 实际黑色边长是否真为 8 cm；
+4. 标签外是否保留足够白色静区；
+5. 打印是否模糊、反光、翘曲；
+6. 曝光是否过长导致运动模糊；
+7. 是否使用对应当前分辨率的 CameraInfo；
+8. 角点细化是否启用；
+9. 相机画面中心与边缘的检测率是否明显不同；
+10. 记录原始图像，离线逐帧看 Tag 实际像素边长。
+
+OpenCV 参数可在存在对应属性时尝试：
+
+```python
+params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
+
+if hasattr(params, "aprilTagQuadDecimate"):
+    params.aprilTagQuadDecimate = 1.0
+if hasattr(params, "aprilTagQuadSigma"):
+    params.aprilTagQuadSigma = 0.0
+```
+
+先保证不降采样、图像清晰，再调阈值参数。
+
+### 9. 当前推荐决定
+
+1. 正式规则口径下，不把“允许 AprilTag”理解为“允许覆盖规定图案”。
+2. 9 号 15 cm Tag 可用于实验，但正式贴中心前必须问裁判。
+3. 11 号 4 cm Tag 不建议放在 `(+15 cm,0)`；移到内圆白色象限，例如 `(+7 cm,+7 cm)`。
+4. 更推荐重印约 10 cm 的 9 号 Tag，放在平台角落且保持圆环/十字完整。
+5. OpenCV 标准 corners 应对应黑色外边框外角；黑色外框实测边长可直接用于 PnP。
+6. 先给四个原始 corners 画红点确认，再决定是否需要任何角点扩展。
+7. 在没有看到当前机载脚本和实机截图前，不应直接加入 `8/6` 扩展补丁。
