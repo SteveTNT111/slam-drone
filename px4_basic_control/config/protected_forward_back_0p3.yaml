@@ -1,0 +1,25 @@
+# Protected body-forward/back position-control profile.
+takeoff_height: 0.30
+hover_duration: 3.0
+forward_distance: 0.50
+horizontal_setpoint_rate: 0.20
+horizontal_tolerance: 0.10
+motion_vertical_tolerance: 0.08
+motion_confirmation_duration: 1.0
+
+prestream_duration: 2.0
+vertical_tolerance: 0.04
+arrival_confirmation_duration: 1.0
+descent_rate: 0.15
+landing_sink_offset: 0.10
+ground_height_tolerance: 0.03
+ground_velocity_tolerance: 0.05
+ground_confirmation_duration: 2.0
+force_disarm_delay: 1.0
+extended_state_timeout: 1.0
+local_state_timeout: 0.50
+setpoint_rate_hz: 20.0
+service_request_interval: 1.0
+
+required_initial_mode: "POSCTL"
+offboard_mode: "OFFBOARD"

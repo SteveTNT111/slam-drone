@@ -1,0 +1,90 @@
+# Default configuration is intentionally unable to command a real aircraft.
+dry_run: true
+dry_run_publish_setpoint: false
+real_flight_enabled: false
+interactive_terminal: false
+exit_after_terminal_state: false
+
+# Manual evidence gates. Set true only after completing the matching checklist.
+external_vision_fusion_verified: false
+rc_takeover_verified: false
+vertical_motion_verified: false
+height_above_0_5_verified: false
+
+# Mission geometry. Any first real-aircraft test must not exceed 0.5 m.
+takeoff_height: 0.5
+takeoff_ramp_rate: 0.25
+setpoint_rate_hz: 20.0
+prestream_duration: 2.0
+ready_confirmation_duration: 0.5
+arrival_stable_duration: 1.0
+hover_duration: 5.0
+
+# Arrival and control-envelope checks.
+horizontal_tolerance: 0.15
+vertical_tolerance: 0.10
+max_horizontal_error: 0.75
+max_vertical_error: 0.50
+
+# Data freshness and discontinuity checks.
+state_timeout: 1.0
+extended_state_timeout: 1.0
+pose_timeout: 0.30
+pose_header_age_limit: 0.50
+pose_jump_threshold: 0.50
+pose_jump_max_dt: 0.30
+pose_jump_latch_duration: 2.0
+
+# SLAM -> vision -> PX4 local numerical-alignment checks.
+validation_history_duration: 6.0
+validation_window_duration: 2.0
+minimum_validation_span: 1.0
+minimum_samples_per_source: 10
+position_alignment_threshold: 0.05
+relative_motion_threshold: 0.05
+attitude_alignment_threshold_deg: 5.0
+timestamp_skew_threshold: 0.10
+runtime_timestamp_skew_grace: 0.50
+
+# The live gate expects a recent, propellers-removed upward lift test.
+require_motion_excitation_for_live: true
+minimum_upward_motion: 0.20
+upward_motion_consistency_threshold: 0.05
+
+# PX4 mode/service timing.
+required_initial_mode: "POSCTL"
+offboard_mode: "OFFBOARD"
+auto_land_mode: "AUTO.LAND"
+service_request_interval: 1.0
+service_wait_timeout: 0.5
+offboard_request_timeout: 10.0
+arming_request_timeout: 10.0
+auto_land_request_timeout: 10.0
+landing_monitor_timeout: 120.0
+takeoff_phase_timeout: 8.0
+arrival_timeout: 10.0
+hover_wall_timeout: 15.0
+mission_total_timeout: 60.0
+
+# Topic/service names.
+state_topic: "/mavros/state"
+extended_state_topic: "/mavros/extended_state"
+local_pose_topic: "/mavros/local_position/pose"
+slam_odom_topic: "/Odometry"
+vision_pose_topic: "/mavros/vision_pose/pose"
+setpoint_topic: "/mavros/setpoint_position/local"
+set_mode_service: "/mavros/set_mode"
+arming_service: "/mavros/cmd/arming"
+trigger_service: "/uav/run_one_key_takeoff_hover_land"
+task_state_topic: "/uav/one_key_takeoff_hover_land/state"
+active_target_topic: "/uav/one_key_takeoff_hover_land/active_target"
+setpoint_frame_id: "map"
+
+# A live run is rejected if any other node publishes one of these control topics.
+conflicting_setpoint_topics:
+  - "/mavros/setpoint_position/local"
+  - "/mavros/setpoint_raw/local"
+  - "/mavros/setpoint_raw/attitude"
+  - "/mavros/setpoint_velocity/cmd_vel"
+forbidden_node_name_tokens:
+  - "px4ctrl"

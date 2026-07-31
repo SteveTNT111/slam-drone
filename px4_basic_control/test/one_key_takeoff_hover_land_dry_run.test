@@ -1,0 +1,23 @@
+<launch>
+  <node pkg="px4_basic_control"
+        type="one_key_takeoff_hover_land.py"
+        name="one_key_takeoff_hover_land"
+        output="screen">
+    <param name="dry_run" value="true" />
+    <param name="dry_run_publish_setpoint" value="false" />
+    <param name="prestream_duration" value="0.20" />
+    <param name="setpoint_rate_hz" value="30.0" />
+    <param name="state_timeout" value="0.5" />
+    <param name="extended_state_timeout" value="0.5" />
+    <param name="pose_timeout" value="0.5" />
+    <param name="pose_header_age_limit" value="0.5" />
+    <param name="validation_window_duration" value="0.6" />
+    <param name="minimum_validation_span" value="0.30" />
+    <param name="minimum_samples_per_source" value="10" />
+  </node>
+
+  <test test-name="mock_dry_run_test"
+        pkg="px4_basic_control"
+        type="mock_dry_run_test.py"
+        time-limit="10.0" />
+</launch>

@@ -1,0 +1,40 @@
+<launch>
+  <node pkg="px4_basic_control"
+        type="one_key_takeoff_hover_land.py"
+        name="one_key_takeoff_hover_land"
+        output="screen">
+    <param name="dry_run" value="false" />
+    <param name="real_flight_enabled" value="true" />
+    <param name="external_vision_fusion_verified" value="true" />
+    <param name="rc_takeover_verified" value="true" />
+    <param name="vertical_motion_verified" value="true" />
+    <param name="require_motion_excitation_for_live" value="false" />
+    <param name="takeoff_height" value="0.30" />
+    <param name="takeoff_ramp_rate" value="2.0" />
+    <param name="setpoint_rate_hz" value="30.0" />
+    <param name="prestream_duration" value="0.15" />
+    <param name="ready_confirmation_duration" value="0.05" />
+    <param name="arrival_stable_duration" value="0.10" />
+    <param name="hover_duration" value="0.15" />
+    <param name="service_request_interval" value="0.05" />
+    <param name="offboard_request_timeout" value="1.0" />
+    <param name="arming_request_timeout" value="1.0" />
+    <param name="auto_land_request_timeout" value="0.35" />
+    <param name="takeoff_phase_timeout" value="1.0" />
+    <param name="arrival_timeout" value="1.0" />
+    <param name="hover_wall_timeout" value="1.0" />
+    <param name="mission_total_timeout" value="4.0" />
+    <param name="state_timeout" value="0.5" />
+    <param name="extended_state_timeout" value="0.5" />
+    <param name="pose_timeout" value="0.5" />
+    <param name="pose_header_age_limit" value="0.5" />
+    <param name="validation_window_duration" value="0.6" />
+    <param name="minimum_validation_span" value="0.30" />
+    <param name="minimum_samples_per_source" value="10" />
+  </node>
+
+  <test test-name="mock_auto_land_rejection_test"
+        pkg="px4_basic_control"
+        type="mock_auto_land_rejection_test.py"
+        time-limit="12.0" />
+</launch>

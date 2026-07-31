@@ -1,0 +1,17 @@
+<launch>
+  <arg name="config_file" default="$(find px4_basic_control)/config/one_key_takeoff_hover_land.yaml" />
+  <arg name="dry_run" default="true" />
+  <arg name="real_flight_enabled" default="false" />
+  <arg name="takeoff_height" default="0.5" />
+
+  <node pkg="px4_basic_control"
+        type="one_key_takeoff_hover_land.py"
+        name="one_key_takeoff_hover_land"
+        output="screen"
+        required="false">
+    <rosparam command="load" file="$(arg config_file)" />
+    <param name="dry_run" value="$(arg dry_run)" />
+    <param name="real_flight_enabled" value="$(arg real_flight_enabled)" />
+    <param name="takeoff_height" value="$(arg takeoff_height)" />
+  </node>
+</launch>
