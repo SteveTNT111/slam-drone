@@ -349,6 +349,8 @@ STATUS\n
 
 三、脚本 2：MAVROS 抛投执行机构控制节点
 
+> **2026-08-01 实测修正：**本节原先提出优先尝试 `MAV_CMD_DO_SET_SERVO=183`，现已被真机结果取代。当前 Pixhawk 4 / PX4 1.13.3 使用 `SYS_USE_IO=0`、`DSHOT_CONFIG=0`、`SYS_CTRL_ALLOC=0`、`SYS_AUTOSTART=4001`，舵机位于物理 FMU/AUX5、软件 MAIN5。应使用 `MAV_CMD_DO_SET_ACTUATOR=187`：`param1=0.0` 实测为打开，`param1=-1.0` 实测为完全关闭，`param2`～`param6` 使用 NaN，`param7=0.0`。具体实现、安全门控和测试步骤以 [[2026D投放舵机MAVROS测试脚本提示词]] 为准；本节后续 `DO_SET_SERVO` 内容只保留为历史设计，不得继续作为实现依据。
+
 创建独立 Python 脚本，例如：
 
 scripts/mavros_payload_servo.py
