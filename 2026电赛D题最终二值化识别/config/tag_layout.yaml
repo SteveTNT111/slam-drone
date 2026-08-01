@@ -1,0 +1,76 @@
+tag_family: tag36h11
+
+# A tag may always be detected and its own pose displayed when its measured
+# black detection-border size is known. It may infer the platform center only
+# when BOTH enabled and measured_layout are true.
+#
+# position_platform_m and rpy_platform_tag_deg define T_platform_tag:
+# tag pose expressed in the platform frame. The detector computes
+# T_camera_platform = T_camera_tag * inverse(T_platform_tag).
+tags:
+  "9":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.15
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "10":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "11":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "12":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "13":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "14":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "15":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.04
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "16":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.08
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "17":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.08
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "18":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.08
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
+  "19":
+    enabled: false
+    measured_layout: false
+    black_border_size_m: 0.08
+    position_platform_m: [0.0, 0.0, 0.0]
+    rpy_platform_tag_deg: [0.0, 0.0, 0.0]
