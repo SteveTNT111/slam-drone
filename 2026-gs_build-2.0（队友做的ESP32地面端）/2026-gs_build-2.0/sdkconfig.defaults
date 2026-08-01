@@ -1,0 +1,11 @@
+# ===== 2026 电赛 D 题 地面站 (ESP32-S3, ESP-IDF v6.0.1) =====
+# 目标芯片: ESP32-S3, 纯原生 USB (USB-Serial-JTAG)
+# 串口: USB-Serial-JTAG (浏览器 Web Serial 识别为 COM 口, 双向)
+
+# 目标芯片 (等价 idf.py set-target esp32s3, 省去 fullclean)
+CONFIG_IDF_TARGET="esp32s3"
+
+# 控制台走 USB-Serial-JTAG, 支持输入(指令)与输出(日志/JSON)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# WiFi/ESP-NOW 信道在 nuedc_protocol.h 里固定为 6, 这里不涉及

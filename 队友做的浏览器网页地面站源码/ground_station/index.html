@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026 D题陆空协同地面站</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="station-shell">
+    <section class="map-panel">
+      <header class="panel-header">
+        <div>
+          <h1>陆空协同无人机系统</h1>
+          <p>400 cm x 500 cm 场地态势显示</p>
+          <p class="coord-note">左下角为原点，X 向右，Y 向上，单位 cm，航向 0° 指向正上方并顺时针增加</p>
+        </div>
+        <div class="header-actions">
+          <button id="startTimerBtn" class="command-button">开始计时</button>
+          <button id="resetBtn" class="icon-button" title="复位显示">复位</button>
+        </div>
+      </header>
+
+      <div class="map-wrap">
+        <canvas id="fieldCanvas" width="800" height="1000"></canvas>
+        <div id="mapTooltip" class="map-tooltip" hidden></div>
+      </div>
+
+      <footer class="map-footer">
+        <div class="legend-item"><span class="legend-dot car"></span>小车</div>
+        <div class="legend-item"><span class="legend-dot drone"></span>无人机</div>
+        <div class="legend-item"><span class="legend-line car-path"></span>小车轨迹</div>
+        <div class="legend-item"><span class="legend-line drone-path"></span>无人机航迹</div>
+      </footer>
+    </section>
+
+    <aside class="side-panel">
+      <section class="status-strip">
+        <div class="timer-card">
+          <span class="label">任务计时</span>
+          <strong id="missionTimer">00:00.0</strong>
+        </div>
+        <div id="linkBadge" class="link-badge offline">离线演示</div>
+      </section>
+
+      <section class="card node-card">
+        <div class="card-title">
+          <h2>三端连接</h2>
+          <span class="phase-chip muted">ESP-NOW</span>
+        </div>
+        <div class="node-grid">
+          <div id="groundNodeStatus" class="node-status offline">
+            <span class="node-dot"></span>
+            <div>
+              <strong>地面站端 ESP32</strong>
+              <small>未连接串口</small>
+            </div>
+          </div>
+          <div id="carNodeStatus" class="node-status offline">
+            <span class="node-dot"></span>
+            <div>
+              <strong>小车端 ESP32</strong>
+              <small>等待在线包</small>
+            </div>
+          </div>
+          <div id="droneNodeStatus" class="node-status offline">
+            <span class="node-dot"></span>
+            <div>
+              <strong>无人机端 ESP32</strong>
+              <small>等待在线包</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <h2>无人机状态</h2>
+          <span id="dronePhase" class="phase-chip">待命</span>
+        </div>
+        <div class="metric-grid">
+          <div><span>X</span><strong id="droneX">-- cm</strong></div>
+          <div><span>Y</span><strong id="droneY">-- cm</strong></div>
+          <div><span>高度</span><strong id="droneH">-- cm</strong></div>
+          <div><span>平台误差</span><strong id="targetErr">-- cm</strong></div>
+          <div><span>水平速度</span><strong id="droneHorizontalSpeed">-- cm/s</strong></div>
+          <div><span>垂直速度</span><strong id="droneVerticalSpeed">-- cm/s</strong></div>
+          <div><span>电压</span><strong id="batteryV">-- V</strong></div>
+          <div><span>更新时间</span><strong id="droneAge">--</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <h2>小车状态</h2>
+          <span id="carPhase" class="phase-chip">待命</span>
+        </div>
+        <div class="metric-grid">
+          <div><span>X</span><strong id="carX">-- cm</strong></div>
+          <div><span>Y</span><strong id="carY">-- cm</strong></div>
+          <div><span>航向</span><strong id="carYaw">-- °</strong></div>
+          <div><span>速度</span><strong id="carSpeed">-- cm/s</strong></div>
+          <div><span>进度</span><strong id="carProgress">-- cm</strong></div>
+          <div><span>更新时间</span><strong id="carAge">--</strong></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <h2>任务流程</h2>
+          <span id="missionStatus" class="phase-chip muted">待命</span>
+        </div>
+        <ol class="timeline" id="timeline">
+          <li data-step="TAKEOFF">起飞至 150 cm</li>
+          <li data-step="HOVER_150">稳定悬停 3 秒</li>
+          <li data-step="FOLLOW">B 点前伴飞</li>
+          <li data-step="DROP">D 点前抛投</li>
+          <li data-step="LAND_ON_CAR">动态降落</li>
+          <li data-step="RETURN_HOME">返航 H 点</li>
+          <li data-step="DONE">任务完成</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <h2>控制台</h2>
+          <span class="phase-chip muted">本地</span>
+        </div>
+        <div class="control-grid">
+          <button id="serialBtn" class="command-button primary">连接串口</button>
+          <button id="disconnectSerialBtn" class="command-button">断开串口</button>
+          <button id="simBtn" class="command-button primary">启动模拟</button>
+          <button id="pauseSimBtn" class="command-button">暂停模拟</button>
+          <button id="task1Btn" class="command-button">抛投任务</button>
+          <button id="task2Btn" class="command-button">动态起降</button>
+        </div>
+        <p class="hint">
+          运行 <code>ground_station_server.py</code> 后，用 Chrome 或 Edge 打开本地页面并连接地面站 ESP32 串口。无串口时可使用离线模拟。
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <h2>通信日志</h2>
+          <span id="serialStatus" class="phase-chip muted">未连接</span>
+        </div>
+        <div id="serialLog" class="serial-log"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

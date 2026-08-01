@@ -3,6 +3,8 @@
 """ROS 1 line-oriented USB serial bridge for the onboard ESP32."""
 
 import sys
+import json
+import math
 import re
 import termios
 import threading
@@ -11,7 +13,8 @@ import time
 import rospy
 from mavros_msgs.msg import State
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from sensor_msgs.msg import BatteryState
+from std_msgs.msg import Bool, String, UInt8
 
 try:
     import serial
@@ -76,6 +79,12 @@ class Esp32SerialBridge:
         self.command_prefix = str(
             rospy.get_param("~command_prefix", "CMD_drone")
         )
+        self.command_dedup_window = max(
+            0.0, float(rospy.get_param("~command_dedup_window", 10.0))
+        )
+        self.battery_topic = rospy.get_param("~battery_topic", "/mavros/battery")
+        self.phase_topic = rospy.get_param("~phase_topic", "/drone/phase")
+        self.task_busy_topic = rospy.get_param("~task_busy_topic", "/drone/task_busy")
         configured_macs = rospy.get_param("~command_allowed_macs", [])
         if isinstance(configured_macs, str):
             configured_macs = configured_macs.split(",")
@@ -95,6 +104,11 @@ class Esp32SerialBridge:
         self._mavros_state_time = rospy.Time(0)
         self._slam_odom = None
         self._slam_odom_time = rospy.Time(0)
+        self._battery = None
+        self._battery_time = rospy.Time(0)
+        self._phase = 0
+        self._task_busy = False
+        self._recent_commands = {}
 
         self.rx_pub = rospy.Publisher("/esp32/rx", String, queue_size=100)
         self.command_pub = rospy.Publisher(
@@ -117,10 +131,19 @@ class Esp32SerialBridge:
                 self._slam_odom_callback,
                 queue_size=10,
             )
+            self.battery_sub = rospy.Subscriber(
+                self.battery_topic, BatteryState, self._battery_callback, queue_size=10
+            )
+            self.phase_sub = rospy.Subscriber(
+                self.phase_topic, UInt8, self._phase_callback, queue_size=10
+            )
             self.telemetry_timer = rospy.Timer(
                 rospy.Duration(1.0 / self.telemetry_rate),
                 self._telemetry_callback,
             )
+        self.task_busy_sub = rospy.Subscriber(
+            self.task_busy_topic, Bool, self._task_busy_callback, queue_size=10
+        )
 
         rospy.on_shutdown(self.close)
         rospy.loginfo(
@@ -250,23 +273,78 @@ class Esp32SerialBridge:
             return None
         return match.group(1).upper(), match.group(2)
 
+    @staticmethod
+    def _parse_structured_command_line(line):
+        try:
+            message = json.loads(line)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(message, dict) or message.get("kind") != "command":
+            return None
+        if str(message.get("source", "")).lower() != "car":
+            return None
+        source_mac = str(message.get("src_mac", "")).strip().upper()
+        payload = str(message.get("command", "")).strip()
+        if not source_mac or not payload:
+            return None
+        return source_mac, payload
+
     def _publish_filtered_command(self, line):
-        parsed = self._parse_espnow_rx_line(line)
+        parsed = self._parse_structured_command_line(line)
+        structured = parsed is not None
+        if parsed is None:
+            parsed = self._parse_espnow_rx_line(line)
         if parsed is None:
             return
 
         source_mac, payload = parsed
-        if not payload.startswith(self.command_prefix):
+        valid_tasks = {"Drone_Task1Off", "Drone_Task2Off"}
+        if structured:
+            if payload not in valid_tasks:
+                rospy.logwarn("Rejected unknown structured car command: %s", payload)
+                return
+        elif not payload.startswith(self.command_prefix):
             return
-        if (
-            self.command_allowed_macs
-            and source_mac not in self.command_allowed_macs
-        ):
+
+        if self.command_allowed_macs and source_mac not in self.command_allowed_macs:
             rospy.logwarn_throttle(
                 2.0,
-                "Rejected CMD_drone message from non-allowed ESP-NOW MAC %s",
+                "Rejected aircraft command from non-allowed ESP-NOW MAC %s",
                 source_mac,
             )
+            return
+
+        if structured and self._task_busy:
+            rospy.logwarn_throttle(
+                2.0, "Rejected %s because /drone/task_busy is true", payload
+            )
+            return
+
+        now = time.monotonic()
+        key = (source_mac, payload)
+        last_seen = self._recent_commands.get(key)
+        duplicate = (
+            structured
+            and last_seen is not None
+            and now - last_seen < self.command_dedup_window
+        )
+        self._recent_commands[key] = now
+        cutoff = now - max(self.command_dedup_window, 1.0) * 2.0
+        self._recent_commands = {
+            item: stamp for item, stamp in self._recent_commands.items()
+            if stamp >= cutoff
+        }
+
+        # ACK every accepted/repeated car frame so a retransmitting car can stop,
+        # but only publish a new ROS task event once inside the deduplication window.
+        if structured:
+            self._send_line(
+                "DRONE_ACK %s" % source_mac,
+                "car command ack",
+                warn_if_disconnected=False,
+            )
+        if duplicate:
+            rospy.logwarn("Ignored duplicate aircraft command: %s from %s", payload, source_mac)
             return
 
         rospy.loginfo("[ESP32 CMD] mac=%s data=%s", source_mac, payload)
@@ -342,6 +420,18 @@ class Esp32SerialBridge:
             self._slam_odom = msg
             self._slam_odom_time = rospy.Time.now()
 
+    def _battery_callback(self, msg):
+        with self._telemetry_lock:
+            self._battery = msg
+            self._battery_time = rospy.Time.now()
+
+    def _phase_callback(self, msg):
+        with self._telemetry_lock:
+            self._phase = int(msg.data) & 0xFF
+
+    def _task_busy_callback(self, msg):
+        self._task_busy = bool(msg.data)
+
     @staticmethod
     def _safe_token(value, default):
         token = str(value).strip()
@@ -349,69 +439,71 @@ class Esp32SerialBridge:
             return default
         return "_".join(token.replace("=", "_").split())
 
+    @staticmethod
+    def _yaw_degrees(quaternion):
+        siny_cosp = 2.0 * (
+            quaternion.w * quaternion.z + quaternion.x * quaternion.y
+        )
+        cosy_cosp = 1.0 - 2.0 * (
+            quaternion.y * quaternion.y + quaternion.z * quaternion.z
+        )
+        return math.degrees(math.atan2(siny_cosp, cosy_cosp))
+
     def _telemetry_callback(self, _event):
         now = rospy.Time.now()
         with self._telemetry_lock:
-            state = self._mavros_state
-            state_time = self._mavros_state_time
             odom = self._slam_odom
             odom_time = self._slam_odom_time
-            sequence = self._telemetry_sequence
-            self._telemetry_sequence = (
-                self._telemetry_sequence + 1
-            ) % TELEMETRY_SEQUENCE_MODULO
+            battery = self._battery
+            battery_time = self._battery_time
+            phase = self._phase
 
-        state_valid = (
-            state is not None
-            and (now - state_time).to_sec() <= self.telemetry_timeout
-        )
         slam_valid = (
             odom is not None
             and (now - odom_time).to_sec() <= self.telemetry_timeout
         )
-
-        connected = bool(state.connected) if state_valid else False
-        armed = bool(state.armed) if state_valid else False
-        mode = self._safe_token(state.mode, "UNKNOWN") if state_valid else "UNKNOWN"
-
-        if slam_valid:
-            position = odom.pose.pose.position
-            frame = self._safe_token(odom.header.frame_id, "camera_init")
-            number_format = "{:.%df}" % self.telemetry_precision
-            x_text = number_format.format(position.x)
-            y_text = number_format.format(position.y)
-            z_text = number_format.format(position.z)
-        else:
-            frame = "UNKNOWN"
-            x_text = "nan"
-            y_text = "nan"
-            z_text = "nan"
-
-        line = (
-            "{prefix} seq={sequence} mavros={mavros} connected={connected} "
-            "armed={armed} "
-            "mode={mode} slam={slam} frame={frame} x={x} y={y} z={z}"
-        ).format(
-            prefix=self._safe_token(self.telemetry_prefix, "DRONE_STATUS"),
-            sequence=sequence,
-            mavros=int(state_valid),
-            connected=int(connected),
-            armed=int(armed),
-            mode=mode,
-            slam=int(slam_valid),
-            frame=frame,
-            x=x_text,
-            y=y_text,
-            z=z_text,
+        battery_valid = (
+            battery is not None
+            and (now - battery_time).to_sec() <= self.telemetry_timeout
         )
 
-        if len(line.encode(self.encoding, errors="replace")) > 200:
-            rospy.logerr_throttle(
+        if not slam_valid:
+            rospy.logwarn_throttle(
                 5.0,
-                "ESP32 telemetry line exceeds firmware limit of 200 bytes",
+                "No fresh SLAM odometry; drone ESP-NOW telemetry is not broadcast",
             )
             return
 
+        position = odom.pose.pose.position
+        orientation = odom.pose.pose.orientation
+        velocity = odom.twist.twist.linear
+
+        x_cm = int(round(position.x * 100.0))
+        y_cm = int(round(position.y * 100.0))
+        z_cm = int(round(position.z * 100.0))
+        yaw_x100 = int(round(self._yaw_degrees(orientation) * 100.0))
+        horizontal_speed_cm_s_x100 = int(
+            round(math.hypot(velocity.x, velocity.y) * 10000.0)
+        )
+
+        battery_pct = 0
+        if battery_valid and math.isfinite(battery.percentage):
+            percentage = float(battery.percentage)
+            if percentage <= 1.0:
+                percentage *= 100.0
+            battery_pct = int(round(max(0.0, min(100.0, percentage))))
+
+        line = (
+            "DRONE_TELEMETRY {x} {y} {speed} {z} {yaw} {battery} {phase}"
+        ).format(
+            x=x_cm,
+            y=y_cm,
+            speed=horizontal_speed_cm_s_x100,
+            z=z_cm,
+            yaw=yaw_x100,
+            battery=battery_pct,
+            phase=phase,
+        )
         if self._send_line(
             line,
             "telemetry",

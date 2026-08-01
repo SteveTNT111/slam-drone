@@ -1,161 +1,123 @@
-# 2026 电赛 D 题 ESP32 通信固件
+﻿# ESP32_D_UNIT：2026 电赛三端兼容通信固件
 
-## 1. 项目说明
+## 1. 当前用途
 
-本工程用于地面端和无人机端 ESP32 之间的 USB/UART 与 ESP-NOW 文本通信。
+本工程不再只把 ESP-NOW 数据当作明文。固件同时支持：
 
-两块 ESP32 使用同一份固件，均具备：
+1. 解析小车、无人机共用的 **68 字节 `espnow_msg_t` 二进制帧**；
+2. 把小车和无人机遥测转换为浏览器地面站可直接读取的单行 JSON；
+3. 在无人机端把小车的两个任务命令转换成串口 JSON，交给 `esp32_serial_node.py`；
+4. 从串口接收无人机 ACK、遥测参数并重新封装成二进制 ESP-NOW 帧；
+5. 保留原有明文 `SEND <text>` 广播能力。
 
-- USB/UART 文本接收和发送；
-- ESP-NOW 广播发送和接收；
-- 板载 LED 无线链路状态指示。
+同一份固件可以烧录到地面 D_UNIT 或无人机 D_UNIT。两端的差别由串口上连接的软件决定，不在 ESP32 中执行飞控逻辑。
 
-抛投执行机构改由无人机飞控直接控制，不属于本 ESP32 工程。固件不包含本地执行机构驱动、控制命令或相关第三方库。
+## 2. 无线参数
 
-## 2. 当前开发环境
+- ESP-NOW 信道：`6`
+- 协议帧长度：`68` 字节
+- 广播地址：`FF:FF:FF:FF:FF:FF`
+- 无人机地址：`30:C9:22:EF:21:A0`
+- 串口：`115200 8N1`
 
-| 项目 | 当前配置 |
+> 关键检查：飞机上的 ESP32 STA MAC 必须等于 `30:C9:22:EF:21:A0`，否则小车和地面测试板的单播任务命令无法送达。上电后输入 `STATUS` 可查看本机 MAC。
+
+## 3. 串口命令
+
+| 命令 | 行为 |
 |---|---|
-| 开发工具 | PlatformIO |
-| 开发板 | 普通 ESP32 Dev Module |
-| PlatformIO 平台 | Espressif32 6.13.0 |
-| 开发框架 | Arduino |
-| Arduino Core | 2.0.17 |
-| 串口 | 115200 baud，8N1 |
-| 无线通信 | ESP-NOW 广播 |
-| ESP-NOW 信道 | 6 |
+| `TASK1` 或 `START1` | 按小车格式单播 `Drone_Task1Off` 给无人机 |
+| `TASK2` 或 `START2` | 按小车格式单播 `Drone_Task2Off` 给无人机 |
+| `DRONE_ACK AA:BB:CC:DD:EE:FF` | 向指定小车 MAC 单播 `Drone_Rec_Cmd_Ok` |
+| `DRONE_TELEMETRY x y speed z yaw battery phase` | 广播一帧无人机结构化遥测 |
+| `SEND <text>` | 保留的明文广播 |
+| `STATUS` | 查看信道、MAC、链路和协议状态 |
+| `HELP` | 打印命令帮助 |
 
-## 3. 项目结构
+`DRONE_TELEMETRY` 参数单位：
 
-```text
-ESP32_D_unit/
-├── include/
-│   └── UART.h
-├── src/
-│   ├── main.cpp
-│   └── UART.cpp
-├── platformio.ini
-└── README.md
-```
+- `x`、`y`、`z`：厘米；
+- `speed`：`cm/s × 100`；
+- `yaw`：`度 × 100`；
+- `battery`：电量百分比 `0~100`；
+- `phase`：比赛任务阶段 `0~255`。
 
-- `src/main.cpp`
-  - 系统初始化；
-  - 固定 Wi-Fi 信道；
-  - 添加 ESP-NOW 广播 peer；
-  - ESP-NOW 发送和接收回调；
-  - 回调消息队列与主循环处理；
-  - UART 命令路由；
-  - 板载 LED 状态控制。
-- `include/UART.h`、`src/UART.cpp`
-  - `Serial.begin(115200, SERIAL_8N1)`；
-  - 非阻塞按行接收；
-  - 兼容 `\n` 和 `\r\n`；
-  - 串口行长度保护；
-  - 统一串口输出接口。
-
-## 4. ESP-NOW 广播配置
+示例：
 
 ```text
-广播地址：FF:FF:FF:FF:FF:FF
-固定信道：6
+DRONE_TELEMETRY 50 120 2050 100 9000 86 3
 ```
 
-所有参与通信的 ESP32 必须使用相同信道。当前不维护地面端或无人机端的点对点 MAC 地址表，接收回调中的来源 MAC 只用于调试输出。
+表示无人机位于 `(50 cm, 120 cm, 100 cm)`，水平速度 `20.50 cm/s`，航向 `90°`，电量 `86%`，阶段 `3`。
 
-当前 Arduino Core 2.0.17 使用的回调签名为：
+## 4. 接收后串口输出
 
-```cpp
-void receiveCallback(const uint8_t *mac, const uint8_t *data, int length);
-void sendCallback(const uint8_t *mac, esp_now_send_status_t status);
+小车遥测：
+
+```json
+{"kind":"car","x_cm":150,"y_cm":210,"speed_cm_s":11.00,"phase":2,"seq":12,"source":1}
 ```
 
-接收回调只复制数据并放入队列，不在回调中执行串口大量输出或长时间操作。无线收到的数据只输出到 USB 串口，不会再次广播，因此不会形成广播死循环。
+无人机遥测：
 
-## 5. UART 文本协议
+```json
+{"kind":"drone","x_cm":50,"y_cm":120,"height_cm":100,"yaw_deg":90.00,"horizontal_speed_cm_s":20.50,"vertical_speed_cm_s":0,"target_error_cm":0,"battery_pct":86,"phase":3,"seq":8,"source":2}
+```
+
+小车任务命令：
+
+```json
+{"kind":"command","source":"car","src_mac":"AA:BB:CC:DD:EE:FF","command":"Drone_Task1Off","task":1,"seq":3}
+```
+
+## 5. PlatformIO 手工模拟小车命令
+
+1. 烧录本工程；
+2. 打开 PlatformIO Serial Monitor，波特率设为 `115200`；
+3. 输入下列一行并回车：
 
 ```text
-115200 baud
-8 data bits
-No parity
-1 stop bit
-一行一条文本
-换行符作为消息结束标志
+TASK1
 ```
 
-当前单行和 ESP-NOW 文本的最大长度为 200 字节。
-
-### 5.1 命令表
-
-| 串口输入 | 行为 | 是否广播 |
-|---|---|---:|
-| `SEND START` | 去掉 `SEND ` 前缀并广播 `START` | 是 |
-| `SEND <文本>` | 广播指定文本 | 是 |
-| 普通非空文本 | 直接广播整行 | 是 |
-| `STATUS` | 打印本机通信状态 | 否 |
-| `HELP` | 打印命令帮助 | 否 |
-
-### 5.2 输出格式
+或：
 
 ```text
-BOOT channel=6 baud=115200 mode=BROADCAST espnow=READY led_pin=2
-UART_RX <文本>
-ESPNOW_RX mac=<来源MAC> data=<文本>
-ESPNOW_TX_OK data=<文本>
-ESPNOW_TX_FAIL data=<文本>
-STATUS espnow=READY uart=READY channel=6 baud=115200 mode=BROADCAST link=ACTIVE led_pin=2
-ERROR <原因>
+TASK2
 ```
 
-## 6. 板载 LED 状态
+命令行方式：
 
-当前普通 ESP32 Dev Module 的板载 LED 使用 GPIO 2。
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" device monitor -b 115200 -p COM你的端口号
+```
 
-| LED 状态 | 含义 |
-|---|---|
-| 快速闪烁 | ESP-NOW 初始化失败 |
-| 缓慢闪烁 | ESP-NOW 已就绪，但近期没有收到其他板的数据 |
-| 常亮 | 最近 5 秒内收到过其他 ESP32 的广播 |
+看到下面输出仅代表本机 ESP-NOW 驱动完成发送：
 
-ESP-NOW 广播没有 TCP 式连接会话，因此 LED 表示初始化状态和最近的无线接收活动。如果具体开发板的板载 LED 不是 GPIO 2，请修改 `src/main.cpp` 中的 `STATUS_LED_PIN`。
+```text
+ESPNOW_TX_OK type=TASK1 len=68
+```
 
-## 7. 两块 ESP32 联调步骤
+还必须在无人机 NX 的 ROS 端确认 `/esp32/cmd` 收到 `Drone_Task1Off` 或 `Drone_Task2Off`。
 
-1. 给两块 ESP32 烧写同一份固件。
-2. 分别打开两个 115200 波特率串口监视器。
-3. 确认两端均输出：
+## 6. 无人机 ROS 串口节点
 
-   ```text
-   BOOT channel=6 baud=115200 mode=BROADCAST espnow=READY led_pin=2
-   ```
+`esp32_serial_node.py` 当前完成：
 
-4. 地面端输入 `SEND START`。
-5. 地面端应输出 `ESPNOW_TX_OK data=START`。
-6. 无人机端应输出 `ESPNOW_RX mac=... data=START`。
-7. 无人机端板载 LED 在收到消息后应常亮约 5 秒。
-8. 无人机端输入 `SEND DRONE_READY`，确认地面端收到。
-9. 输入 `STATUS` 检查 ESP-NOW、信道和 LED 链路状态。
-10. 连续发送多行文本，确认无乱码、无死机、无广播死循环。
+- 识别 D_UNIT 输出的结构化任务 JSON；
+- 只接受 `Drone_Task1Off`、`Drone_Task2Off`；
+- 可通过 `~command_allowed_macs` 限制小车 MAC；
+- 在 `/drone/task_busy=true` 时拒绝新任务；
+- 在去重窗口内不重复发布同一任务，但仍会回 ACK；
+- 发布任务到 `/esp32/cmd`，**本脚本自身不解锁、不切 OFFBOARD、不直接起飞**；
+- 读取 SLAM 里程计并转换为厘米后，通过 D_UNIT 广播无人机遥测。
 
-`ESPNOW_TX_OK` 只表示本机无线驱动完成发送，不代表接收端一定已经处理。验收时必须同时观察另一块板是否输出 `ESPNOW_RX`。
+建议实机启动时显式配置小车 MAC 白名单。
 
-## 8. 当前进度
+## 7. 构建验证
 
-- [x] 将空 ESP-IDF 模板切换为 Arduino PlatformIO 工程。
-- [x] 地面端和无人机端共用同一份固件。
-- [x] 实现固定信道 ESP-NOW 广播收发。
-- [x] 实现广播 peer 和回调消息队列。
-- [x] 防止无线接收数据再次广播。
-- [x] 实现 115200 baud UART 双向文本通信。
-- [x] 实现非阻塞按行接收和长度保护。
-- [x] 实现 `SEND <文本>`、普通文本、`STATUS` 和 `HELP`。
-- [x] 实现板载 LED 链路状态指示。
-- [x] 移除 ESP32 本地执行机构控制代码和第三方依赖。
-- [ ] 两块真实 ESP32 烧写和双向无线联调。
-- [ ] Orin NX 串口节点整链路联调。
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run
+```
 
-## 9. 当前边界
-
-- ESP32 只负责 UART 与 ESP-NOW 文本转发。
-- 收到 `START` 只会转发到串口，不会自动触发飞控动作。
-- 本工程不修改 PX4、FAST-LIO2、ROS 工作空间或飞行安全逻辑。
-- 当前没有应用层 ACK、CRC、序列号和心跳机制，后续按任务需要增加。
+本次修改已在 `esp32dev / Arduino Core 2.0.17` 环境通过编译。

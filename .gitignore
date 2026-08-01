@@ -15,6 +15,12 @@
 /catkin_ws/devel/
 /catkin_ws/log/
 
+# ESP-IDF / PlatformIO 构建产物（源码目录可正常纳入版本管理）
+**/build/
+**/.pio/
+**/managed_components/
+**/sdkconfig.old
+
 # 常见数据与压缩包
 *.bag
 *.zip
