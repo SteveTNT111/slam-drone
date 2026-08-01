@@ -1,0 +1,57 @@
+<launch>
+  <arg name="start_camera" default="true"/>
+  <arg name="camera_width" default="640"/>
+  <arg name="camera_height" default="480"/>
+  <arg name="camera_fps" default="30"/>
+  <arg name="enable_depth" default="true"/>
+  <arg name="subscribe_depth" default="$(arg enable_depth)"/>
+
+  <arg name="image_topic" default="/camera/color/image_raw"/>
+  <arg name="camera_info_topic" default="/camera/color/camera_info"/>
+  <arg name="depth_topic" default="/camera/aligned_depth_to_color/image_raw"/>
+  <arg name="local_pose_topic" default="/mavros/local_position/pose"/>
+  <arg name="show_window" default="true"/>
+  <arg name="show_debug_views" default="false"/>
+  <arg name="publish_geometry_debug" default="false"/>
+  <arg name="print_rate_hz" default="5.0"/>
+  <arg name="lost_print_rate_hz" default="1.0"/>
+  <arg name="timing_log_rate_hz" default="1.0"/>
+  <arg name="subscriber_buffer_bytes" default="2097152"/>
+
+  <include if="$(arg start_camera)"
+           file="$(find realsense2_camera)/launch/rs_camera.launch">
+    <arg name="enable_depth" value="$(arg enable_depth)"/>
+    <arg name="enable_color" value="true"/>
+    <arg name="color_width" value="$(arg camera_width)"/>
+    <arg name="color_height" value="$(arg camera_height)"/>
+    <arg name="color_fps" value="$(arg camera_fps)"/>
+    <arg name="align_depth" value="$(arg enable_depth)"/>
+    <arg name="publish_tf" value="false"/>
+  </include>
+
+  <node pkg="d2026_vision"
+        type="platform_target_enhanced_node.py"
+        name="platform_target_enhanced"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(find d2026_vision)/config/target_geometry.yaml"/>
+    <rosparam command="load" file="$(find d2026_vision)/config/tag_layout.yaml"/>
+    <rosparam command="load" file="$(find d2026_vision)/config/fusion.yaml"/>
+    <!-- Load enhanced overrides last: depth freshness, confirmation count,
+         Hough limits, and preprocessing must win over shared defaults. -->
+    <rosparam command="load" file="$(find d2026_vision)/config/target_enhancement.yaml"/>
+
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="subscribe_depth" value="$(arg subscribe_depth)"/>
+    <param name="local_pose_topic" value="$(arg local_pose_topic)"/>
+    <param name="show_window" value="$(arg show_window)"/>
+    <param name="show_debug_views" value="$(arg show_debug_views)"/>
+    <param name="publish_geometry_debug" value="$(arg publish_geometry_debug)"/>
+    <param name="print_rate_hz" value="$(arg print_rate_hz)"/>
+    <param name="lost_print_rate_hz" value="$(arg lost_print_rate_hz)"/>
+    <param name="timing_log_rate_hz" value="$(arg timing_log_rate_hz)"/>
+    <param name="subscriber_buffer_bytes" value="$(arg subscriber_buffer_bytes)"/>
+  </node>
+</launch>

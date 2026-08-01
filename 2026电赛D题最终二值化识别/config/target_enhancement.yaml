@@ -1,0 +1,50 @@
+# Enhanced-node-only preprocessing. The original dual node does not load this file.
+enhancement_mode: clahe_adaptive
+clahe_clip_limit: 2.5
+clahe_tile_grid_size: 8
+enhancement_blur_kernel: 9
+adaptive_block_size: 51
+adaptive_c: 9.0
+binary_morph_kernel: 3
+binary_close_iterations: 0
+binary_open_iterations: 1
+
+# Keep the detector on the enhanced binary image.  A live D435 empty-floor
+# frame produced 926 full-frame Hough lines in the CLAHE fallback and made one
+# callback exceed 20 s; the adaptive image produced only three lines.
+fallback_to_clahe: false
+
+# Enhanced-node-only worst-case guards.  The original dual launch does not
+# load this YAML, so its unlimited legacy behaviour is unchanged.
+max_ellipse_hough_segments: 40
+max_cross_hough_segments: 40
+
+# Print one concise per-stage timing line per second during live tuning.
+timing_log_rate_hz: 1.0
+
+# Display-only sampling around the optical image center.  A larger patch makes
+# IMAGE CENTER Z robust to isolated D435 holes; it does not change the target
+# depth-size gate, which continues to use depth_patch_radius_px.
+display_center_depth_patch_radius_px: 25
+
+# Live enhanced mode uses D435 aligned depth as a physical 50 cm size check.
+# This prevents thresholded floor texture from publishing a false platform.
+require_aligned_depth_for_geometry: true
+depth_patch_radius_px: 15
+max_depth_age_s: 0.50
+geometry_confirmation_frames: 5
+
+# Recover a 30 cm inner ellipse when the printed cross splits its contour.
+# Partial rings are accepted only after ratio, concentricity, cross, temporal,
+# and aligned-depth 50 cm physical-size checks all pass.
+enable_scaled_inner_recovery: true
+scaled_inner_band_fraction: 0.18
+scaled_inner_refit_error: 0.12
+scaled_inner_refit_iterations: 3
+scaled_inner_min_points: 80
+scaled_inner_min_coverage: 0.45
+scaled_inner_outer_min_coverage: 0.20
+min_contour_angular_coverage: 0.10
+min_visible_perimeter_fraction: 0.35
+min_ring_support_fraction: 0.40
+min_inner_containment_margin: 0.02

@@ -1,0 +1,82 @@
+# Physical target: black 50 cm outer ring, 30 cm inner ring, and a center cross.
+outer_diameter_m: 0.50
+inner_diameter_m: 0.30
+expected_inner_outer_ratio: 0.60
+
+# Required preprocessing only. Enhancement switches are architectural placeholders;
+# they are intentionally not implemented in this version.
+blur_kernel: 3
+canny_low: 35
+canny_high: 110
+use_basic_threshold: false
+basic_threshold_value: 90
+enable_color_enhancement: false       # TODO(real images): interface only
+enable_contrast_enhancement: false    # TODO(real images): interface only
+enable_clahe: false                   # TODO(real images): interface only
+enable_adaptive_threshold: false      # TODO(real images): interface only
+
+# Ellipse candidate and concentric-pair gates.
+min_contour_points: 28
+min_ellipse_diameter_px: 28.0
+max_ellipse_diameter_fraction: 1.20
+min_axis_ratio: 0.35
+max_fit_error: 0.22
+ratio_tolerance: 0.16
+max_concentricity_fraction: 0.10
+max_axis_ratio_difference: 0.22
+max_axis_angle_difference_deg: 18.0
+# A nearly circular fit has no stable major-axis angle; only gate the angle
+# after both fitted ellipses are visibly eccentric.
+angle_gate_min_eccentricity: 0.08
+
+# Collapse the two Canny edges of one printed black circle line before pairing.
+duplicate_center_fraction: 0.035
+duplicate_diameter_fraction: 0.075
+duplicate_axis_ratio_difference: 0.08
+min_contour_angular_coverage: 0.20
+
+# Verify that both selected ellipses are supported by a dark, nearly complete
+# printed line and that the 30 cm ellipse lies strictly inside the 50 cm one.
+min_ring_dark_contrast: 10.0
+min_ring_support_fraction: 0.52
+ring_sample_count: 96
+ring_sample_band_fraction: 0.025
+ring_side_offset_fraction: 0.065
+min_inner_containment_margin: 0.08
+min_visible_perimeter_fraction: 0.92
+
+# If aligned depth is fresh, the observed 50 cm diameter must agree with
+# fx * 0.50 / Z. This prevents treating the real 50 cm outer circle as the
+# 30 cm inner circle and inventing a larger outer ellipse.
+use_depth_size_gate: true
+min_depth_diameter_ratio: 0.62
+max_depth_diameter_ratio: 1.38
+depth_patch_radius_px: 5
+min_valid_depth_m: 0.15
+max_valid_depth_m: 5.0
+
+# The printed cross touches both circle outlines. Remove only the detected
+# one-pixel straight Canny edges before contour extraction, then close the tiny
+# gaps so fitEllipse sees the two complete circular/elliptical outlines.
+suppress_straight_lines_for_ellipses: true
+ellipse_line_hough_threshold: 22
+ellipse_line_min_length_fraction: 0.14
+ellipse_line_cluster_tolerance_deg: 8.0
+ellipse_line_max_gap_px: 10
+ellipse_line_mask_thickness_px: 1
+ellipse_reconnect_kernel: 5
+
+# Cross detection within the selected ring ROI.
+cross_roi_fraction: 0.48
+hough_rho_px: 1.0
+hough_theta_deg: 1.0
+hough_threshold: 22
+hough_min_line_length_fraction: 0.10
+hough_max_line_gap_px: 12
+cross_orthogonality_tolerance_deg: 18.0
+cross_center_tolerance_fraction: 0.12
+
+# Temporal/ROI tracking. Full-frame search resumes after tracking_timeout_s.
+tracking_roi_half_size_px: 190
+tracking_timeout_s: 0.50
+temporal_distance_scale_px: 90.0

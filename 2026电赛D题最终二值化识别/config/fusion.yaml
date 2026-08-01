@@ -1,0 +1,37 @@
+# Dual-channel decision and temporal smoothing.
+fusion_disagreement_threshold_px: 30.0
+fusion_min_confidence: 0.20
+fusion_geometry_weight: 0.55
+fusion_tag_weight: 0.45
+filter_time_constant_s: 0.10
+tracking_timeout_s: 0.50
+geometry_confirmation_frames: 3
+geometry_confirmation_max_jump_px: 28.0
+
+# Latest aligned D435 depth is paired to RGB by timestamp. The display always
+# shows IMAGE CENTER Z when a fresh valid patch is available.
+subscribe_depth: true
+max_depth_age_s: 0.25
+
+# Camera optical -> body FRD mount translation, measured from aircraft origin
+# to camera optical origin and expressed as forward/right/down metres.
+camera_mount_x_forward: 0.0
+camera_mount_y_right: 0.0
+camera_mount_z_down: 0.0
+
+# Latest MAVROS local pose is display-only; stale data is omitted.
+local_pose_topic: /mavros/local_position/pose
+max_local_pose_age_s: 0.25
+
+# Output/diagnostic behavior.
+print_rate_hz: 5.0
+lost_print_rate_hz: 1.0
+show_debug_views: false
+publish_geometry_debug: false
+
+# Geometry-only pose contains a measured center position but ambiguous attitude.
+# Its orientation covariance is deliberately very large.
+geometry_position_std_m: 0.12
+geometry_orientation_variance: 1000000.0
+tag_position_std_m: 0.05
+tag_orientation_std_rad: 0.20
